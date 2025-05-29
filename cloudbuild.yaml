@@ -1,0 +1,8 @@
+steps:
+  - name: "gcr.io/cloud-builders/gcloud"
+    args:
+      [
+        "echo",
+        "Build and Test Triggered from GitHub for GeminiFlow! Commit ID $COMMIT_SHA",
+      ]
+# @Todo add actual build/test steps later
