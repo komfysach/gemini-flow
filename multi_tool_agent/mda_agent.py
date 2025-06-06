@@ -21,15 +21,14 @@ DEFAULT_CLOUD_RUN_SERVICE_ID = os.getenv("TARGET_APP_CLOUD_RUN_SERVICE_NAME", "g
 DEFAULT_CLOUD_RUN_LOCATION = os.getenv("TARGET_APP_CLOUD_RUN_REGION", "us-central1")
 
 # --- MDA Tools ---
-def get_cloud_run_metrics(
+def get_cloud_run_metrics( 
     project_id: str,
     service_id: str,
     location: str,
     time_window_minutes: int = 15
 ) -> dict:
     """
-    Fetches key metrics (request count, error count, latency) for a Cloud Run service
-    over a specified time window.
+    Fetches key metrics for a Cloud Run service using specific aggregations.
     """
     if not all([project_id, service_id, location]):
         return {"status": "ERROR", "error_message": "Project ID, Service ID, and Location are required."}
@@ -53,7 +52,7 @@ def get_cloud_run_metrics(
 
     metrics_data = {
         "request_count": 0,
-        "error_count": 0, 
+        "error_count": 0,
         "p50_latency_ms": None,
         "p95_latency_ms": None,
     }
@@ -67,19 +66,17 @@ def get_cloud_run_metrics(
     try:
         time_series_view_full = monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL
 
-        # Request Count
+        # --- Request Count ---
         request_count_filter = ' AND '.join(common_filter_parts + ['metric.type = "run.googleapis.com/request_count"'])
         results = client.list_time_series(
             request={
-                "name": project_name,
-                "filter": request_count_filter,
-                "interval": interval,
+                "name": project_name, "filter": request_count_filter, "interval": interval,
                 "view": time_series_view_full,
-                "aggregation": monitoring_v3.types.Aggregation(
-                    alignment_period={"seconds": time_window_minutes * 60},
-                    per_series_aligner=monitoring_v3.types.Aggregation.Aligner.ALIGN_SUM,
-                    cross_series_reducer=monitoring_v3.types.Aggregation.Reducer.REDUCE_SUM,
-                ),
+                "aggregation": {
+                    "alignment_period": {"seconds": time_window_minutes * 60},
+                    "per_series_aligner": monitoring_v3.types.Aggregation.Aligner.ALIGN_SUM,
+                    "cross_series_reducer": monitoring_v3.types.Aggregation.Reducer.REDUCE_SUM,
+                },
             }
         )
         for result in results:
@@ -87,7 +84,7 @@ def get_cloud_run_metrics(
                 metrics_data["request_count"] += point.value.int64_value
         logging.info(f"MDA: Request count: {metrics_data['request_count']}")
 
-        # Error Count
+        # --- Error Count ---
         for code_class in ["4xx", "5xx"]:
             error_filter = ' AND '.join(common_filter_parts + [
                 'metric.type = "run.googleapis.com/request_count"',
@@ -95,15 +92,13 @@ def get_cloud_run_metrics(
             ])
             results = client.list_time_series(
                 request={
-                    "name": project_name,
-                    "filter": error_filter,
-                    "interval": interval,
+                    "name": project_name, "filter": error_filter, "interval": interval,
                     "view": time_series_view_full,
-                    "aggregation": monitoring_v3.types.Aggregation(
-                        alignment_period={"seconds": time_window_minutes * 60},
-                        per_series_aligner=monitoring_v3.types.Aggregation.Aligner.ALIGN_SUM,
-                        cross_series_reducer=monitoring_v3.types.Aggregation.Reducer.REDUCE_SUM,
-                    ),
+                    "aggregation": {
+                        "alignment_period": {"seconds": time_window_minutes * 60},
+                        "per_series_aligner": monitoring_v3.types.Aggregation.Aligner.ALIGN_SUM,
+                        "cross_series_reducer": monitoring_v3.types.Aggregation.Reducer.REDUCE_SUM,
+                    },
                 }
             )
             for result in results:
@@ -111,26 +106,45 @@ def get_cloud_run_metrics(
                     metrics_data["error_count"] += point.value.int64_value
         logging.info(f"MDA: Error count (4xx+5xx): {metrics_data['error_count']}")
 
-        # Latency
+        # --- MODIFIED: Latency P50 and P95 ---
         latency_filter = ' AND '.join(common_filter_parts + ['metric.type = "run.googleapis.com/request_latencies"'])
-        results = client.list_time_series(
+        
+        # P50 Latency
+        p50_results = client.list_time_series(
             request={
-                "name": project_name,
-                "filter": latency_filter,
-                "interval": interval,
+                "name": project_name, "filter": latency_filter, "interval": interval,
                 "view": time_series_view_full,
+                "aggregation": {
+                    "alignment_period": {"seconds": time_window_minutes * 60},
+                    "per_series_aligner": monitoring_v3.types.Aggregation.Aligner.ALIGN_PERCENTILE_50,
+                    "cross_series_reducer": monitoring_v3.types.Aggregation.Reducer.REDUCE_MEAN, # Reduce across revisions if needed
+                },
             }
         )
-        for result in results: 
+        for result in p50_results:
             if result.points:
-                latest_point = result.points[0]
-                if latest_point.value.distribution_value:
-                    dist_value = latest_point.value.distribution_value
-                    if dist_value.mean and dist_value.count > 0:
-                         metrics_data["p50_latency_ms"] = round(dist_value.mean, 1)
-                         metrics_data["p95_latency_ms"] = round(dist_value.mean * 2, 1) 
-                         logging.info(f"MDA: Latency (mean as proxy for p50): {metrics_data['p50_latency_ms']} ms")
-                break 
+                metrics_data["p50_latency_ms"] = round(result.points[0].value.double_value, 1)
+                break
+        logging.info(f"MDA: P50 Latency: {metrics_data['p50_latency_ms']} ms")
+        
+        # P95 Latency
+        p95_results = client.list_time_series(
+            request={
+                "name": project_name, "filter": latency_filter, "interval": interval,
+                "view": time_series_view_full,
+                "aggregation": {
+                    "alignment_period": {"seconds": time_window_minutes * 60},
+                    "per_series_aligner": monitoring_v3.types.Aggregation.Aligner.ALIGN_PERCENTILE_95,
+                    "cross_series_reducer": monitoring_v3.types.Aggregation.Reducer.REDUCE_MEAN,
+                },
+            }
+        )
+        for result in p95_results:
+            if result.points:
+                metrics_data["p95_latency_ms"] = round(result.points[0].value.double_value, 1)
+                break
+        logging.info(f"MDA: P95 Latency: {metrics_data['p95_latency_ms']} ms")
+
 
         return {
             "status": "SUCCESS",
