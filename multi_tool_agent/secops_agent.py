@@ -60,19 +60,19 @@ def get_vulnerability_scan_results(image_uri_with_digest: str) -> dict:
     try:
         client = containeranalysis_v1.ContainerAnalysisClient()
         resource_url = f"https://{image_uri_with_digest}"
+
+        ga_client = client.get_grafeas_client()
         
         filter_str = f'kind="VULNERABILITY" AND resource_url="{resource_url}"'
-        
-        request = containeranalysis_v1.ListOccurrencesRequest(
-            parent=f"projects/{GCP_PROJECT_ID}",
-            filter=filter_str,
-        )
 
         vulnerabilities = []
         max_retries = 3
         wait_seconds = 10
         for i in range(max_retries):
-            page_result = client.list_occurrences(request=request)
+            page_result = ga_client.list_occurrences(
+                parent=f"projects/{GCP_PROJECT_ID}",
+                filter=filter_str
+            )
             for occurrence in page_result:
                 vulnerability = occurrence.vulnerability
                 vuln_details = {
