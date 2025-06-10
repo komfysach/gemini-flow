@@ -2,7 +2,7 @@
 
 import os
 import logging
-import xml.etree.ElementTree as ET # For parsing JUnit XML
+import json
 from google.adk.agents import Agent # Or LlmAgent if BTA directly uses an LLM for complex tasks
 from google.cloud.devtools import cloudbuild_v1
 from google.cloud import storage
@@ -30,6 +30,7 @@ def _download_gcs_artifact(bucket_name: str, object_name: str) -> str | None:
         storage_client = storage.Client(project=GCP_PROJECT_ID)
         bucket = storage_client.bucket(bucket_name)
         blob = bucket.blob(object_name)
+        logging.info(f"BTA: Checking for artifact in GCS: bucket={bucket_name}, object={object_name}")
         if not blob.exists():
             logging.warning(f"BTA: Artifact not found in GCS: gs://{bucket_name}/{object_name}")
             return None
@@ -166,14 +167,6 @@ def trigger_build_and_monitor(
         build_id = build_result.id
         build_status_str = cloudbuild_v1.Build.Status(build_result.status).name
         logging.info(f"BTA: Build {build_id} completed with status: {build_status_str}")
-
-        test_results_summary = {
-            "test_status": "NOT_RUN_OR_NOT_FOUND",
-            "tests_run": 0,
-            "tests_failed": 0,
-            "tests_errors": 0,
-            "failure_summary": "No test failures, or tests not processed."
-        }
         
         final_commit_sha_for_artifacts = commit_sha
         if not final_commit_sha_for_artifacts and build_result.source_provenance and \
@@ -187,9 +180,8 @@ def trigger_build_and_monitor(
             test_artifact_object_name = f"test-results/{final_commit_sha_for_artifacts}/test_results.json"
             logging.info(f"BTA: Downloading test artifact: gs://{TEST_RESULTS_BUCKET_NAME}/{test_artifact_object_name}")
             json_content = _download_gcs_artifact(TEST_RESULTS_BUCKET_NAME, test_artifact_object_name)
-            
+
             if json_content:
-                # MODIFIED: Use the new JSON parsing function
                 parsed_results = _parse_go_test_json(json_content)
                 test_results_summary["tests_run"] = parsed_results.get("tests", 0)
                 test_results_summary["tests_failed"] = parsed_results.get("failures", 0)
@@ -204,7 +196,7 @@ def trigger_build_and_monitor(
                     test_results_summary["test_status"] = "NO_TESTS_FOUND_IN_REPORT"
             else:
                 test_results_summary["test_status"] = "RESULTS_FILE_NOT_FOUND"
-                test_results_summary["failure_summary"] = "Test results XML file not found in artifacts."
+                test_results_summary["failure_summary"] = "Test results JSON file not found in artifacts."
         else:
             logging.warning("BTA: Could not determine commit SHA for fetching test artifacts.")
             test_results_summary["failure_summary"] = "Could not determine commit SHA for fetching test artifacts."
