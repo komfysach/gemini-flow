@@ -39,35 +39,58 @@ def _download_gcs_artifact(bucket_name: str, object_name: str) -> str | None:
         logging.error(f"BTA: Failed to download GCS artifact gs://{bucket_name}/{object_name}: {e}")
         return None
 
-def _parse_junit_xml(xml_content: str) -> dict:
-    results = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0, "failure_details": []}
-    try:
-        if not xml_content:
-            return results 
-        root = ET.fromstring(xml_content)
-        for testsuite in root.findall("testsuite"):
-            results["tests"] += int(testsuite.get("tests", 0))
-            results["failures"] += int(testsuite.get("failures", 0))
-            results["errors"] += int(testsuite.get("errors", 0))
-            results["skipped"] += int(testsuite.get("skipped", 0))
-            for testcase in testsuite.findall("testcase"):
-                failure = testcase.find("failure")
-                if failure is not None:
-                    detail = {
-                        "test_name": testcase.get("name", "Unknown Test"),
-                        "class_name": testcase.get("classname", "Unknown Class"),
-                        "message": failure.get("message", "No message"),
-                        "details": failure.text.strip() if failure.text else "No details"
-                    }
-                    results["failure_details"].append(detail)
-        logging.info(f"BTA: Parsed test results: Total={results['tests']}, Failures={results['failures']}, Errors={results['errors']}")
-    except Exception as e:
-        logging.error(f"BTA: Error parsing JUnit XML: {e}")
-        results["parse_error"] = str(e)
+def _parse_go_test_json(json_content: str) -> dict:
+    """Parses the line-by-line JSON output from 'go test -json'."""
+    results = {"tests": 0, "failures": 0, "skipped": 0, "failure_details": []}
+    if not json_content:
+        return results
+
+    test_outputs = {}
+    test_events = []
+    
+    # First pass: decode all lines into a list of event dictionaries
+    for line in json_content.strip().split('\n'):
+        try:
+            event = json.loads(line)
+            test_events.append(event)
+        except json.JSONDecodeError:
+            logging.warning(f"BTA: Skipping non-JSON line in test output: {line}")
+            continue
+
+    # Second pass: process the events to count tests and collect outputs
+    for event in test_events:
+        action = event.get("Action")
+        test_name = event.get("Test")
+
+        # Only process events associated with a specific test
+        if not test_name:
+            continue
+
+        if action == "run":
+            results["tests"] += 1
+            test_outputs[test_name] = [] # Initialize output buffer for this test
+
+        elif action == "output" and test_name in test_outputs:
+            test_outputs[test_name].append(event.get("Output", ""))
+        
+        elif action == "skip":
+            results["skipped"] += 1
+
+    # Third pass: Now that all outputs are collected, create failure details for any failed tests
+    failed_tests = {event.get("Test") for event in test_events if event.get("Action") == "fail" and event.get("Test")}
+    
+    for test_name in failed_tests:
+        failure_detail = {
+            "test_name": test_name,
+            "details": "".join(test_outputs.get(test_name, ["No output captured for this test."])).strip()
+        }
+        results["failure_details"].append(failure_detail)
+
+    results['failures'] = len(results['failure_details'])
+    logging.info(f"BTA: Parsed test results: Total={results['tests']}, Failures={results['failures']}")
     return results
 
 def _summarize_test_failures_with_gemini(failure_details: list) -> str:
-    # ... (Implementation remains the same) ...
     if not failure_details:
         return "No failures to summarize."
     if not GCP_PROJECT_ID or not VERTEX_AI_LOCATION or 'genai' not in globals() or not hasattr(genai,'GenerativeModel'):
@@ -161,19 +184,20 @@ def trigger_build_and_monitor(
             final_commit_sha_for_artifacts = build_result.substitutions['COMMIT_SHA']
         
         if final_commit_sha_for_artifacts:
-            test_artifact_object_name = f"test-results/{final_commit_sha_for_artifacts}/test_results.xml"
-            logging.info(f"BTA: Attempting to download test artifact from bucket '{TEST_RESULTS_BUCKET_NAME}' at object path '{test_artifact_object_name}'")
-            xml_content = _download_gcs_artifact(TEST_RESULTS_BUCKET_NAME, test_artifact_object_name)
-
-            if xml_content:
-                parsed_results = _parse_junit_xml(xml_content)
+            test_artifact_object_name = f"test-results/{final_commit_sha_for_artifacts}/test_results.json"
+            logging.info(f"BTA: Downloading test artifact: gs://{TEST_RESULTS_BUCKET_NAME}/{test_artifact_object_name}")
+            json_content = _download_gcs_artifact(TEST_RESULTS_BUCKET_NAME, test_artifact_object_name)
+            
+            if json_content:
+                # MODIFIED: Use the new JSON parsing function
+                parsed_results = _parse_go_test_json(json_content)
                 test_results_summary["tests_run"] = parsed_results.get("tests", 0)
                 test_results_summary["tests_failed"] = parsed_results.get("failures", 0)
-                test_results_summary["tests_errors"] = parsed_results.get("errors", 0)
-                if parsed_results.get("failures", 0) > 0 or parsed_results.get("errors", 0) > 0:
+                test_results_summary["tests_skipped"] = parsed_results.get("skipped", 0)
+                if parsed_results.get("failures", 0) > 0:
                     test_results_summary["test_status"] = "FAILED"
                     test_results_summary["failure_summary"] = _summarize_test_failures_with_gemini(parsed_results.get("failure_details", []))
-                elif parsed_results.get("tests", 0) > 0 :
+                elif parsed_results.get("tests", 0) > 0:
                     test_results_summary["test_status"] = "PASSED"
                     test_results_summary["failure_summary"] = "All tests passed."
                 else:
