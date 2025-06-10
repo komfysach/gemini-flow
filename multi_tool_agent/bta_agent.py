@@ -220,6 +220,7 @@ def trigger_build_and_monitor(
                 "image_uri_commit": image_uri_commit,
                 "image_uri_latest": image_uri_latest,
                 "message": "Build completed successfully.",
+                "details": MessageToDict(build_result._pb),
                 "test_results": test_results_summary
             }
         else: 
