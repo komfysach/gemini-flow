@@ -220,7 +220,7 @@ if __name__ == "__main__":
         print("3. Set ALL required environment variables.")
         print("4. Run: adk run .")
         print("5. At the 'User:' prompt, try queries like:")
-        print("   User: deploy gemini-flow-hello-world from master")
+        print("   User: deploy gemini-flow-hello-world from main")
         print("   User: what is the health of geminiflow-hello-world-svc in us-central1")
         print("   User: how much have we spent in the last 14 days")
         print("   User: what are the security vulnerabilities in us-central1-docker.pkg.dev/geminiflow-461207/gemini-flow-apps/gemini-flow-hello-world@sha256:...")
