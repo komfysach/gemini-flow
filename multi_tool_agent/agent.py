@@ -22,6 +22,7 @@ try:
     from finops_agent import finops_agent, get_total_project_cost, get_cost_by_service
     from secops_agent import secops_agent, get_vulnerability_scan_results, summarize_vulnerabilities_with_gemini
     from rollback_agent import rollback_agent, get_previous_stable_revision, redirect_traffic_to_revision
+    from infra_agent import infra_agent, run_terraform_plan, run_terraform_apply
     logging.info("MOA: Successfully imported SCA, BTA, DA, MDA, FinOps, Rollback modules and Security modules and agent instances.")
 except ImportError as e:
     logging.error(f"Could not import sub-agents or their tool functions: {e}. Ensure agent files define agent instances and are accessible.")
@@ -33,6 +34,7 @@ except ImportError as e:
     finops_agent = Agent(name="dummy_finops_agent", tools=[])
     secops_agent = LlmAgent(name="dummy_secops_agent", model="gemini-1.5-flash-latest", tools=[])
     rollback_agent = Agent(name="dummy_rollback_agent", tools=[])
+    infra_agent = Agent(name="dummy_infra_agent", tools=[])
     def get_latest_commit_sha(**kwargs): return {"status": "ERROR", "error_message": "SCA module not found."}
     def trigger_build_and_monitor(**kwargs): return {"status": "ERROR", "error_message": "BTA module not found."}
     def deploy_to_cloud_run(**kwargs): return {"status": "ERROR", "error_message": "DA module not found."}
@@ -45,6 +47,8 @@ except ImportError as e:
     def summarize_vulnerabilities_with_gemini(**kwargs): return "Error: Security module not found."
     def get_previous_stable_revision(**kwargs): return {"status": "ERROR", "error_message": "Rollback module not found."}
     def redirect_traffic_to_revision(**kwargs): return {"status": "ERROR", "error_message": "Rollback module not found."}
+    def run_terraform_plan(**kwargs): return {"status": "ERROR", "error_message": "Infra module not found."}
+    def run_terraform_apply(**kwargs): return {"status": "ERROR", "error_message": "Infra module not found."}
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -91,6 +95,66 @@ def execute_rollback_workflow(service_id: str, location: str) -> str:
         error_msg = f"Rollback FAILED: Attempted to redirect traffic, but failed. Reason: {redirect_report.get('error_message')}"
         logging.error(error_msg)
         return error_msg
+    
+def plan_new_environment(
+    new_service_name: str,
+    image_uri_to_deploy: str,
+    region: str = TARGET_APP_CLOUD_RUN_REGION
+) -> str:
+    """
+    Plans the creation of a new service environment using Terraform.
+
+    Args:
+        new_service_name (str): The name for the new Cloud Run service to be planned.
+        image_uri_to_deploy (str): The full container image URI to use for the new service.
+        region (str): The GCP region for the new service.
+
+    Returns:
+        str: A summary of the Terraform plan.
+    """
+    logging.info(f"MOA Tool (Infra Plan): Planning new service '{new_service_name}' with image '{image_uri_to_deploy}'.")
+    plan_report = run_terraform_plan(
+        new_service_name=new_service_name,
+        deployment_image_uri=image_uri_to_deploy,
+        region=region
+    )
+
+    if plan_report.get("status") != "SUCCESS":
+        return f"Terraform plan FAILED. Reason: {plan_report.get('error_message')}"
+    
+    # In a real app, you would parse the log URL to get the plan output.
+    # For now, we return the generic success message from the tool.
+    return plan_report.get("plan_summary", "Plan completed, but summary is unavailable.")
+
+
+def apply_new_environment(
+    new_service_name: str,
+    image_uri_to_deploy: str,
+    region: str = TARGET_APP_CLOUD_RUN_REGION
+) -> str:
+    """
+    Applies a Terraform plan to create a new service environment.
+    This should be called after a plan has been reviewed and approved by the user.
+
+    Args:
+        new_service_name (str): The name for the new Cloud Run service to create.
+        image_uri_to_deploy (str): The container image URI to use for the new service.
+        region (str): The GCP region for the new service.
+
+    Returns:
+        str: A summary of the Terraform apply operation.
+    """
+    logging.info(f"MOA Tool (Infra Apply): Applying plan for new service '{new_service_name}'.")
+    apply_report = run_terraform_apply(
+        new_service_name=new_service_name,
+        deployment_image_uri=image_uri_to_deploy,
+        region=region
+    )
+
+    if apply_report.get("status") != "SUCCESS":
+        return f"Terraform apply FAILED. Reason: {apply_report.get('error_message')}"
+
+    return apply_report.get("message", "Apply completed, but summary is unavailable.")
 
 # --- MOA Tool Definitions ---
 def execute_smart_deploy_workflow(
@@ -243,19 +307,25 @@ root_agent = LlmAgent(
     ),
      instruction=(
         "You are the Master Orchestrator for a DevSecOps system called GeminiFlow. "
-        "You have specialized sub-agents. Your primary roles are to manage secure, resilient deployments and provide health checks. "
-        "\n1. For DEPLOYMENTS: When a user asks to deploy an application, use the 'execute_smart_deploy_workflow' tool. "
-        "This is a comprehensive workflow that includes building, testing, security scanning, deploying, and "
-        "if the post-deployment health check fails, it will automatically roll back to the previous version. "
-        "Summarize the final outcome for the user, clearly stating if a rollback occurred."
+        "You have specialized sub-agents. Your primary roles are to manage secure deployments, provide health checks, and provision new infrastructure. "
+        "\n1. For DEPLOYMENTS: When a user asks to deploy an application, this includes a security scan. Use the 'execute_smart_deploy_workflow' tool. "
         "\n2. For HEALTH CHECKS: When a user asks for the health or status of a service, use the 'execute_health_check_workflow' tool and summarize the raw data it returns."
+        "\n3. For INFRASTRUCTURE PROVISIONING: This is a two-step process. "
+        "  a. First, when a user asks to 'plan' or 'provision' a new environment (e.g., 'plan a new staging service named staging-v2'), "
+        "     identify the new service name and the image to deploy. Then, you MUST use the 'plan_new_environment' tool. "
+        "     Present the plan summary to the user and tell them to give approval to apply it."
+        "  b. Second, when the user gives approval (e.g., 'yes, apply the plan for staging-v2'), "
+        "     you MUST use the 'apply_new_environment' tool with the same parameters to create the infrastructure."
     ),
     tools=[
         execute_smart_deploy_workflow,
         execute_health_check_workflow,
-        execute_finops_report_workflow
+        execute_finops_report_workflow,
+        execute_rollback_workflow,
+        plan_new_environment,
+        apply_new_environment
     ],
-    sub_agents=[sca_agent, bta_agent, da_agent, mda_agent, finops_agent, secops_agent, rollback_agent]
+    sub_agents=[sca_agent, bta_agent, da_agent, mda_agent, finops_agent, secops_agent, rollback_agent, infra_agent]
 )
 
 # --- Local Testing ---
