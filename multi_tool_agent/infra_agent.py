@@ -18,35 +18,31 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # the geminiflow-infra-sa@... service account key file.
 # This SA needs "Cloud Build Editor" and permissions to create the resources in main.tf.
 GCP_PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
+# The service account that will EXECUTE the Terraform steps inside Cloud Build.
+# It needs permissions to create Cloud Run services, manage GCS state, etc.
+# Example: geminiflow-infra-sa@geminiflow-461207.iam.gserviceaccount.com
+TERRAFORM_EXECUTION_SA = os.getenv("TERRAFORM_SERVICE_ACCOUNT")
+# The name of the GitHub repository connected to Cloud Build where your terraform/ directory lives.
+TERRAFORM_SOURCE_REPO_NAME = os.getenv("TERRAFORM_SOURCE_REPO", "gemini-flow")
 # Vertex AI/Gemini configuration for summarization
 GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash-latest")
 VERTEX_AI_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 
 # --- Infrastructure Agent Tools ---
 
-def run_terraform_plan(
-    new_service_name: str,
-    deployment_image_uri: str,
-    region: str = "us-central1"
-) -> dict:
-    """
-    Runs 'terraform plan' via a Cloud Build job to preview infrastructure changes.
+def _run_terraform_build(command: str, new_service_name: str, deployment_image_uri: str, region: str) -> dict:
+    """Helper function to submit a Terraform plan or apply job to Cloud Build."""
+    if not TERRAFORM_EXECUTION_SA:
+        return {"status": "ERROR", "error_message": "TERRAFORM_SERVICE_ACCOUNT environment variable is not set."}
 
-    Args:
-        new_service_name (str): The name for the new Cloud Run service to be planned.
-        deployment_image_uri (str): The container image URI to use for the service.
-        region (str): The GCP region for the deployment.
-
-    Returns:
-        dict: A dictionary containing the status and the raw Terraform plan output.
-    """
-    logging.info(f"Infra Agent: Running 'terraform plan' for new service '{new_service_name}'.")
+    logging.info(f"Infra Agent: Submitting 'terraform {command}' build for service '{new_service_name}'.")
     client = cloudbuild_v1.CloudBuildClient()
     
-    # The build configuration points to the terraform/cloudbuild-terraform.yaml file
-    # and passes Terraform variables as build-time substitution variables.
+    # MODIFIED: Added the 'options' block to specify the logging mode.
+    # This is required when a custom service_account is used for the build.
+    service_account_path = f"projects/{GCP_PROJECT_ID}/serviceAccounts/{TERRAFORM_EXECUTION_SA}"
     build = cloudbuild_v1.Build(
-        source={"repo_source": {"repo_name": "gemini-flow", "branch_name": "main"}},
+        source={"repo_source": {"repo_name": TERRAFORM_SOURCE_REPO_NAME, "branch_name": "main"}},
         steps=[
             {
                 "name": "hashicorp/terraform:1.8",
@@ -58,7 +54,7 @@ def run_terraform_plan(
                 "name": "hashicorp/terraform:1.8",
                 "entrypoint": "terraform",
                 "args": [
-                    "plan",
+                    command, # 'plan' or 'apply -auto-approve'
                     f"-var=project_id={GCP_PROJECT_ID}",
                     f"-var=region={region}",
                     f"-var=service_name={new_service_name}",
@@ -68,95 +64,57 @@ def run_terraform_plan(
                 "dir": "terraform",
             },
         ],
+        service_account=service_account_path,
+        options={
+            "logging": cloudbuild_v1.BuildOptions.LoggingMode.CLOUD_LOGGING_ONLY,
+        },
         timeout={"seconds": 1200},
     )
 
     try:
         operation = client.create_build(project_id=GCP_PROJECT_ID, build=build)
         result = operation.result()
-
-        # It's tricky to get the stdout of a build step directly from the result object.
-        # A more robust solution would save the plan to GCS and have this tool read it back.
-        # For the hackathon, we'll return a success message and rely on checking the build logs manually for the plan.
         log_url = result.log_url
-        logging.info(f"Infra Agent: 'terraform plan' build completed. Status: {result.status}. Logs at: {log_url}")
+        logging.info(f"Infra Agent: 'terraform {command}' build completed. Status: {result.status}. Logs at: {log_url}")
 
         if result.status == cloudbuild_v1.Build.Status.SUCCESS:
-            # In a real app, you would parse the logs to get the plan output.
-            # For now, we'll return a generic success message and the log URL.
-            plan_summary = f"Terraform plan executed successfully. Please review the plan in the build logs before applying. Logs: {log_url}"
-            return {"status": "SUCCESS", "plan_summary": plan_summary}
+            # For a real implementation, you would parse the logs to get the plan/apply output.
+            # This simplified version just confirms success.
+            return {"status": "SUCCESS", "message": f"Terraform {command} completed successfully. See logs for details.", "log_url": log_url}
         else:
-            return {"status": "FAILURE", "error_message": f"Terraform plan build failed. Check logs for details: {log_url}"}
+            return {"status": "FAILURE", "error_message": f"Terraform {command} build failed. Check logs for details: {log_url}"}
             
     except Exception as e:
-        error_msg = f"Infra Agent: Failed to submit 'terraform plan' build: {e}"
+        error_msg = f"Infra Agent: Failed to submit 'terraform {command}' build: {e}"
         logging.exception(error_msg)
         return {"status": "ERROR", "error_message": error_msg}
 
+
+def run_terraform_plan(
+    new_service_name: str,
+    deployment_image_uri: str,
+    region: str = "us-central1"
+) -> dict:
+    """Runs 'terraform plan' via a Cloud Build job to preview infrastructure changes."""
+    return _run_terraform_build(
+        command="plan",
+        new_service_name=new_service_name,
+        deployment_image_uri=deployment_image_uri,
+        region=region
+    )
 
 def run_terraform_apply(
     new_service_name: str,
     deployment_image_uri: str,
     region: str = "us-central1"
 ) -> dict:
-    """
-    Runs 'terraform apply' via a Cloud Build job to provision the infrastructure.
-
-    Args:
-        new_service_name (str): The name for the new Cloud Run service to create.
-        deployment_image_uri (str): The container image URI to use for the service.
-        region (str): The GCP region for the deployment.
-
-    Returns:
-        dict: A dictionary containing the status and result of the apply operation.
-    """
-    logging.info(f"Infra Agent: Running 'terraform apply' for new service '{new_service_name}'.")
-    client = cloudbuild_v1.CloudBuildClient()
-
-    build = cloudbuild_v1.Build(
-        source={"repo_source": {"repo_name": "gemini-flow", "branch_name": "main"}},
-        steps=[
-            {
-                "name": "hashicorp/terraform:1.8",
-                "entrypoint": "terraform",
-                "args": ["init"],
-                "dir": "terraform",
-            },
-            {
-                "name": "hashicorp/terraform:1.8",
-                "entrypoint": "terraform",
-                "args": [
-                    "apply",
-                    "-auto-approve",
-                    f"-var=project_id={GCP_PROJECT_ID}",
-                    f"-var=region={region}",
-                    f"-var=service_name={new_service_name}",
-                    f"-var=image_uri={deployment_image_uri}",
-                ],
-                "dir": "terraform",
-            },
-        ],
-        timeout={"seconds": 1200},
+    """Runs 'terraform apply' via a Cloud Build job to provision the infrastructure."""
+    return _run_terraform_build(
+        command="apply -auto-approve",
+        new_service_name=new_service_name,
+        deployment_image_uri=deployment_image_uri,
+        region=region
     )
-
-    try:
-        operation = client.create_build(project_id=GCP_PROJECT_ID, build=build)
-        result = operation.result()
-        log_url = result.log_url
-        logging.info(f"Infra Agent: 'terraform apply' build completed. Status: {result.status}. Logs at: {log_url}")
-        
-        if result.status == cloudbuild_v1.Build.Status.SUCCESS:
-            # Here you would ideally parse the log for the output variable "service_url".
-            return {"status": "SUCCESS", "message": f"Terraform apply completed successfully. Check build logs for outputs: {log_url}"}
-        else:
-            return {"status": "FAILURE", "error_message": f"Terraform apply build failed. Check logs for details: {log_url}"}
-
-    except Exception as e:
-        error_msg = f"Infra Agent: Failed to submit 'terraform apply' build: {e}"
-        logging.exception(error_msg)
-        return {"status": "ERROR", "error_message": error_msg}
-
 
 # --- ADK Agent Definition ---
 infra_agent = LlmAgent(
