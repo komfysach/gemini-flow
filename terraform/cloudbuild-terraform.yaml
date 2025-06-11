@@ -1,25 +1,21 @@
 steps:
-  # Step 1: Use the official HashiCorp Terraform image to run commands
-  - name: "hashicorp/terraform:1.8" # Use a specific version of Terraform
-    entrypoint: "terraform"
-    args: ["init"]
-    dir: "terraform" # Specify the directory where your .tf files are
-
-  # Step 2: Run Terraform Plan or Apply
-  # The specific command ('plan' or 'apply') will be passed in via a substitution variable
-  # This makes the build config reusable for both planning and applying.
+  # Step 1: Initialize Terraform
   - name: "hashicorp/terraform:1.8"
     entrypoint: "terraform"
-    args:
-      [
-        "${_COMMAND}",
-        "-var=project_id=${PROJECT_ID}",
-        "-var=region=${_REGION}",
-        "-var=service_name=${_SERVICE_NAME}",
-        "-var=image_uri=${_IMAGE_URI}",
-      ]
+    args: ["init"]
     dir: "terraform"
 
-# Note: We are not saving plan files as artifacts in this basic version for simplicity.
-# A more advanced workflow would save the plan file from a 'plan' run and use that exact file in an 'apply' run.
+  # Step 2: Run the command passed from the trigger ('plan' or 'apply')
+  - name: "hashicorp/terraform:1.8"
+    entrypoint: "terraform"
+    # Uses substitution variables that will be sent by the Infra Agent's API call
+    args:
+      - "${_COMMAND}"
+      - "-var=project_id=${PROJECT_ID}"
+      - "-var=region=${_REGION}"
+      - "-var=service_name=${_SERVICE_NAME}"
+      - "-var=image_uri=${_IMAGE_URI}"
+      - "-no-color" # Good for clean logs
+    dir: "terraform"
+
 timeout: "1200s"
