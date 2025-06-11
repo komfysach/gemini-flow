@@ -59,6 +59,8 @@ TARGET_GITHUB_REPO_FULL_NAME = os.getenv("TARGET_GITHUB_REPO", "komfysach/gemini
 TARGET_APP_TRIGGER_ID = os.getenv("TARGET_APP_TRIGGER_ID", "deploy-hello-world-app")
 TARGET_APP_CLOUD_RUN_REGION = os.getenv("TARGET_APP_CLOUD_RUN_REGION", "us-central1")
 TARGET_APP_CLOUD_RUN_SERVICE_NAME = os.getenv("TARGET_APP_CLOUD_RUN_SERVICE_NAME", "geminiflow-hello-world-svc")
+INFRA_DEFAULT_IMAGE_REPO = os.getenv("ARTIFACT_REGISTRY_REPO", "gemini-flow-apps")
+INFRA_DEFAULT_IMAGE_NAME = "gemini-flow-hello-world"
 
 def execute_rollback_workflow(service_id: str, location: str) -> str:
     """
@@ -98,56 +100,67 @@ def execute_rollback_workflow(service_id: str, location: str) -> str:
     
 def plan_new_environment(
     new_service_name: str,
-    image_uri_to_deploy: str,
+    image_uri_to_deploy: str = "latest", # MODIFIED: Make this optional and default to "latest"
     region: str = TARGET_APP_CLOUD_RUN_REGION
 ) -> str:
     """
     Plans the creation of a new service environment using Terraform.
-
-    Args:
-        new_service_name (str): The name for the new Cloud Run service to be planned.
-        image_uri_to_deploy (str): The full container image URI to use for the new service.
-        region (str): The GCP region for the new service.
-
-    Returns:
-        str: A summary of the Terraform plan.
+    If 'image_uri_to_deploy' is 'latest' or not provided, it uses the known latest image for gemini-flow-hello-world.
     """
-    logging.info(f"MOA Tool (Infra Plan): Planning new service '{new_service_name}' with image '{image_uri_to_deploy}'.")
+    logging.info(f"MOA Tool (Infra Plan): Planning new service '{new_service_name}'.")
+
+    # MODIFIED: Logic to determine the final image URI
+    final_image_uri = ""
+    if image_uri_to_deploy.lower() == "latest":
+        # Construct the known ':latest' URI from configuration
+        final_image_uri = (
+            f"{TARGET_APP_CLOUD_RUN_REGION}-docker.pkg.dev/{GCP_PROJECT_ID}/"
+            f"{INFRA_DEFAULT_IMAGE_REPO}/{INFRA_DEFAULT_IMAGE_NAME}:latest"
+        )
+        logging.info(f"MOA Tool (Infra Plan): 'latest' keyword detected. Using default image URI: {final_image_uri}")
+    else:
+        # Use the specific URI provided by the LLM
+        final_image_uri = image_uri_to_deploy
+        logging.info(f"MOA Tool (Infra Plan): Using specific image URI provided: {final_image_uri}")
+
     plan_report = run_terraform_plan(
         new_service_name=new_service_name,
-        deployment_image_uri=image_uri_to_deploy,
+        deployment_image_uri=final_image_uri,
         region=region
     )
 
     if plan_report.get("status") != "SUCCESS":
         return f"Terraform plan FAILED. Reason: {plan_report.get('error_message')}"
     
-    # In a real app, you would parse the log URL to get the plan output.
-    # For now, we return the generic success message from the tool.
     return plan_report.get("plan_summary", "Plan completed, but summary is unavailable.")
 
 
 def apply_new_environment(
     new_service_name: str,
-    image_uri_to_deploy: str,
+    image_uri_to_deploy: str = "latest", # MODIFIED: Also make this optional for consistency
     region: str = TARGET_APP_CLOUD_RUN_REGION
 ) -> str:
     """
     Applies a Terraform plan to create a new service environment.
     This should be called after a plan has been reviewed and approved by the user.
-
-    Args:
-        new_service_name (str): The name for the new Cloud Run service to create.
-        image_uri_to_deploy (str): The container image URI to use for the new service.
-        region (str): The GCP region for the new service.
-
-    Returns:
-        str: A summary of the Terraform apply operation.
     """
     logging.info(f"MOA Tool (Infra Apply): Applying plan for new service '{new_service_name}'.")
+    
+    # MODIFIED: Logic to determine the final image URI is duplicated here for the apply step
+    final_image_uri = ""
+    if image_uri_to_deploy.lower() == "latest":
+        final_image_uri = (
+            f"{TARGET_APP_CLOUD_RUN_REGION}-docker.pkg.dev/{GCP_PROJECT_ID}/"
+            f"{INFRA_DEFAULT_IMAGE_REPO}/{INFRA_DEFAULT_IMAGE_NAME}:latest"
+        )
+        logging.info(f"MOA Tool (Infra Apply): 'latest' keyword detected. Using default image URI: {final_image_uri}")
+    else:
+        final_image_uri = image_uri_to_deploy
+        logging.info(f"MOA Tool (Infra Apply): Using specific image URI provided: {final_image_uri}")
+
     apply_report = run_terraform_apply(
         new_service_name=new_service_name,
-        deployment_image_uri=image_uri_to_deploy,
+        deployment_image_uri=final_image_uri,
         region=region
     )
 
