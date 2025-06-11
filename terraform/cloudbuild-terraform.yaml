@@ -5,17 +5,30 @@ steps:
     args: ["init"]
     dir: "terraform"
 
+  # Step 1.5: Debug - Show what command will be executed
+  - name: "hashicorp/terraform:1.8"
+    entrypoint: "sh"
+    args:
+      - "-c"
+      - |
+        echo "Command to execute: ${_COMMAND}"
+        echo "Project ID: ${PROJECT_ID}"
+        echo "Region: ${_REGION}"
+        echo "Service Name: ${_SERVICE_NAME}"
+        echo "Image URI: ${_IMAGE_URI}"
+        terraform --version
+    dir: "terraform"
+
   # Step 2: Run the command passed from the trigger ('plan' or 'apply')
   - name: "hashicorp/terraform:1.8"
     entrypoint: "terraform"
-    # Uses substitution variables that will be sent by the Infra Agent's API call
     args:
       - "${_COMMAND}"
       - "-var=project_id=${PROJECT_ID}"
       - "-var=region=${_REGION}"
       - "-var=service_name=${_SERVICE_NAME}"
       - "-var=image_uri=${_IMAGE_URI}"
-      - "-no-color" # Good for clean logs
+      - "-no-color"
     dir: "terraform"
 
 options:
