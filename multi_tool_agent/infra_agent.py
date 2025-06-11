@@ -24,58 +24,40 @@ GCP_PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
 TERRAFORM_EXECUTION_SA = os.getenv("TERRAFORM_SERVICE_ACCOUNT")
 # The name of the GitHub repository connected to Cloud Build where your terraform/ directory lives.
 TERRAFORM_SOURCE_REPO_NAME = os.getenv("TERRAFORM_SOURCE_REPO", "gemini-flow")
+TERRAFORM_TRIGGER_ID = os.getenv("TERRAFORM_TRIGGER_ID", "terraform-plan-and-apply")
 # Vertex AI/Gemini configuration for summarization
 GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash-latest")
 VERTEX_AI_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 
 # --- Infrastructure Agent Tools ---
 
-def _run_terraform_build(command: str, new_service_name: str, deployment_image_uri: str, region: str) -> dict:
-    """Helper function to submit a Terraform plan or apply job to Cloud Build."""
-    if not TERRAFORM_EXECUTION_SA:
-        return {"status": "ERROR", "error_message": "TERRAFORM_SERVICE_ACCOUNT environment variable is not set."}
-
-    logging.info(f"Infra Agent: Submitting 'terraform {command}' build for service '{new_service_name}'.")
+def _run_terraform_trigger(command: str, new_service_name: str, deployment_image_uri: str, region: str) -> dict:
+    """Helper function to run the Terraform trigger in Cloud Build with 'plan' or 'apply'."""
+    logging.info(f"Infra Agent: Invoking Terraform trigger for command '{command}' on service '{new_service_name}'.")
     client = cloudbuild_v1.CloudBuildClient()
-    
-    # MODIFIED: Added the 'options' block to specify the logging mode.
-    # This is required when a custom service_account is used for the build.
-    service_account_path = f"projects/{GCP_PROJECT_ID}/serviceAccounts/{TERRAFORM_EXECUTION_SA}"
-    build = cloudbuild_v1.Build(
-        source={"repo_source": {"repo_name": TERRAFORM_SOURCE_REPO_NAME, "branch_name": "main"}},
-        steps=[
-            {
-                "name": "hashicorp/terraform:1.8",
-                "entrypoint": "terraform",
-                "args": ["init"],
-                "dir": "terraform",
-            },
-            {
-                "name": "hashicorp/terraform:1.8",
-                "entrypoint": "terraform",
-                "args": [
-                    command, # 'plan' or 'apply -auto-approve'
-                    f"-var=project_id={GCP_PROJECT_ID}",
-                    f"-var=region={region}",
-                    f"-var=service_name={new_service_name}",
-                    f"-var=image_uri={deployment_image_uri}",
-                    "-no-color", # Ensures clean output for parsing
-                ],
-                "dir": "terraform",
-            },
-        ],
-        service_account=service_account_path,
-        options={
-            "logging": cloudbuild_v1.BuildOptions.LoggingMode.CLOUD_LOGGING_ONLY,
-        },
-        timeout={"seconds": 1200},
-    )
 
+    # The source to build. We specify the branch and substitutions here to override
+    # any defaults in the trigger, ensuring we build the right thing every time.
+    source = cloudbuild_v1.types.RepoSource(
+        repo_name=TERRAFORM_SOURCE_REPO_NAME,
+        branch_name="main", # Or your default branch for terraform files
+        substitutions={
+            "_COMMAND": command,
+            "_REGION": region,
+            "_SERVICE_NAME": new_service_name,
+            "_IMAGE_URI": deployment_image_uri,
+        },
+    )
+    
     try:
-        operation = client.create_build(project_id=GCP_PROJECT_ID, build=build)
+        operation = client.run_build_trigger(
+            project_id=GCP_PROJECT_ID,
+            trigger_id=TERRAFORM_TRIGGER_ID,
+            source=source
+        )
         result = operation.result()
         log_url = result.log_url
-        logging.info(f"Infra Agent: 'terraform {command}' build completed. Status: {result.status}. Logs at: {log_url}")
+        logging.info(f"Infra Agent: Terraform trigger run completed. Status: {result.status}. Logs at: {log_url}")
 
         if result.status == cloudbuild_v1.Build.Status.SUCCESS:
             # For a real implementation, you would parse the logs to get the plan/apply output.
@@ -83,9 +65,9 @@ def _run_terraform_build(command: str, new_service_name: str, deployment_image_u
             return {"status": "SUCCESS", "message": f"Terraform {command} completed successfully. See logs for details.", "log_url": log_url}
         else:
             return {"status": "FAILURE", "error_message": f"Terraform {command} build failed. Check logs for details: {log_url}"}
-            
+
     except Exception as e:
-        error_msg = f"Infra Agent: Failed to submit 'terraform {command}' build: {e}"
+        error_msg = f"Infra Agent: Failed to run Terraform trigger: {e}"
         logging.exception(error_msg)
         return {"status": "ERROR", "error_message": error_msg}
 
@@ -95,8 +77,8 @@ def run_terraform_plan(
     deployment_image_uri: str,
     region: str = "us-central1"
 ) -> dict:
-    """Runs 'terraform plan' via a Cloud Build job to preview infrastructure changes."""
-    return _run_terraform_build(
+    """Runs 'terraform plan' via a Cloud Build trigger to preview infrastructure changes."""
+    return _run_terraform_trigger(
         command="plan",
         new_service_name=new_service_name,
         deployment_image_uri=deployment_image_uri,
@@ -108,25 +90,13 @@ def run_terraform_apply(
     deployment_image_uri: str,
     region: str = "us-central1"
 ) -> dict:
-    """Runs 'terraform apply' via a Cloud Build job to provision the infrastructure."""
-    return _run_terraform_build(
+    """Runs 'terraform apply' via a Cloud Build trigger to provision the infrastructure."""
+    return _run_terraform_trigger(
         command="apply -auto-approve",
         new_service_name=new_service_name,
         deployment_image_uri=deployment_image_uri,
         region=region
     )
-
-# --- ADK Agent Definition ---
-infra_agent = LlmAgent(
-    name="geminiflow_infrastructure_agent",
-    model=GEMINI_MODEL_NAME,
-    description="An agent that can provision new cloud environments and services using Terraform.",
-    instruction="You are an Infrastructure Agent. Your job is to plan and apply infrastructure changes using Terraform based on user requests.",
-    tools=[
-        run_terraform_plan,
-        run_terraform_apply,
-    ],
-)
 
 # --- Local Testing Example ---
 if __name__ == "__main__":
