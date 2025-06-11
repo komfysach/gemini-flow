@@ -19,16 +19,20 @@ steps:
         terraform --version
     dir: "terraform"
 
-  # Step 2: Run the command passed from the trigger ('plan' or 'apply')
+  # Step 2: Run terraform command with proper argument handling
   - name: "hashicorp/terraform:1.8"
-    entrypoint: "terraform"
+    entrypoint: "sh"
     args:
-      - "${_COMMAND}"
-      - "-var=project_id=${PROJECT_ID}"
-      - "-var=region=${_REGION}"
-      - "-var=service_name=${_SERVICE_NAME}"
-      - "-var=image_uri=${_IMAGE_URI}"
-      - "-no-color"
+      - "-c"
+      - |
+        if [ "${_COMMAND}" = "plan" ]; then
+          terraform plan -var="project_id=${PROJECT_ID}" -var="region=${_REGION}" -var="service_name=${_SERVICE_NAME}" -var="image_uri=${_IMAGE_URI}" -no-color
+        elif [ "${_COMMAND}" = "apply" ] || [ "${_COMMAND}" = "apply -auto-approve" ]; then
+          terraform apply -auto-approve -var="project_id=${PROJECT_ID}" -var="region=${_REGION}" -var="service_name=${_SERVICE_NAME}" -var="image_uri=${_IMAGE_URI}" -no-color
+        else
+          echo "Error: Invalid command ${_COMMAND}. Use 'plan' or 'apply'"
+          exit 1
+        fi
     dir: "terraform"
 
 options:
