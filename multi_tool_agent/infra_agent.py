@@ -98,6 +98,18 @@ def run_terraform_apply(
         region=region
     )
 
+# --- ADK Agent Definition --
+infra_agent = LlmAgent(
+    name="geminiflow_infrastructure_agent",
+    model=GEMINI_MODEL_NAME,
+    description="An agent that can provision new cloud environments and services using Terraform.",
+    instruction="You are an Infrastructure Agent. Your job is to plan and apply infrastructure changes using Terraform based on user requests.",
+    tools=[
+        run_terraform_plan,
+        run_terraform_apply,
+    ],
+)
+
 # --- Local Testing Example ---
 if __name__ == "__main__":
     # Before running:
