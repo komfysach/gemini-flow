@@ -1,12 +1,12 @@
 steps:
   # Step 1: Initialize Terraform
-  - name: "hashicorp/terraform:1.8"
+  - name: "hashicorp/terraform:1.12.1"
     entrypoint: "terraform"
     args: ["init"]
     dir: "terraform"
 
   # Step 1.5: Debug - Show what command will be executed
-  - name: "hashicorp/terraform:1.8"
+  - name: "hashicorp/terraform:1.12.1"
     entrypoint: "sh"
     args:
       - "-c"
@@ -20,7 +20,7 @@ steps:
     dir: "terraform"
 
   # Step 2: Run terraform command with proper argument handling
-  - name: "hashicorp/terraform:1.8"
+  - name: "hashicorp/terraform:1.12.1"
     entrypoint: "sh"
     args:
       - "-c"
