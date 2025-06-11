@@ -21,7 +21,8 @@ try:
     from mda_agent import mda_agent, get_cloud_run_metrics, get_cloud_run_logs, generate_health_report
     from finops_agent import finops_agent, get_total_project_cost, get_cost_by_service
     from secops_agent import secops_agent, get_vulnerability_scan_results, summarize_vulnerabilities_with_gemini
-    logging.info("MOA: Successfully imported SCA, BTA, DA, MDA, FinOps, and Security modules and agent instances.")
+    from rollback_agent import rollback_agent, get_previous_stable_revision, redirect_traffic_to_revision
+    logging.info("MOA: Successfully imported SCA, BTA, DA, MDA, FinOps, Rollback modules and Security modules and agent instances.")
 except ImportError as e:
     logging.error(f"Could not import sub-agents or their tool functions: {e}. Ensure agent files define agent instances and are accessible.")
     # Define dummy agents and functions if imports fail
@@ -30,7 +31,8 @@ except ImportError as e:
     da_agent = Agent(name="dummy_da_agent", tools=[])
     mda_agent = LlmAgent(name="dummy_mda_agent", model="gemini-1.5-flash-latest", tools=[])
     finops_agent = Agent(name="dummy_finops_agent", tools=[])
-    secops_agent = LlmAgent(name="dummy_secops_agent", model="gemini-1.5-flash-latest", tools=[]) # MODIFIED
+    secops_agent = LlmAgent(name="dummy_secops_agent", model="gemini-1.5-flash-latest", tools=[])
+    rollback_agent = Agent(name="dummy_rollback_agent", tools=[])
     def get_latest_commit_sha(**kwargs): return {"status": "ERROR", "error_message": "SCA module not found."}
     def trigger_build_and_monitor(**kwargs): return {"status": "ERROR", "error_message": "BTA module not found."}
     def deploy_to_cloud_run(**kwargs): return {"status": "ERROR", "error_message": "DA module not found."}
@@ -41,6 +43,8 @@ except ImportError as e:
     def get_cost_by_service(**kwargs): return {"status": "ERROR", "error_message": "FinOps module not found."}
     def get_vulnerability_scan_results(**kwargs): return {"status": "ERROR", "error_message": "Security module not found."}
     def summarize_vulnerabilities_with_gemini(**kwargs): return "Error: Security module not found."
+    def get_previous_stable_revision(**kwargs): return {"status": "ERROR", "error_message": "Rollback module not found."}
+    def redirect_traffic_to_revision(**kwargs): return {"status": "ERROR", "error_message": "Rollback module not found."}
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -51,6 +55,42 @@ TARGET_GITHUB_REPO_FULL_NAME = os.getenv("TARGET_GITHUB_REPO", "komfysach/gemini
 TARGET_APP_TRIGGER_ID = os.getenv("TARGET_APP_TRIGGER_ID", "deploy-hello-world-app")
 TARGET_APP_CLOUD_RUN_REGION = os.getenv("TARGET_APP_CLOUD_RUN_REGION", "us-central1")
 TARGET_APP_CLOUD_RUN_SERVICE_NAME = os.getenv("TARGET_APP_CLOUD_RUN_SERVICE_NAME", "geminiflow-hello-world-svc")
+
+def execute_rollback_workflow(service_id: str, location: str) -> str:
+    """
+    Executes a full rollback workflow for a given service.
+    """
+    logging.warning(f"MOA Tool (Rollback): Initiating rollback for service '{service_id}' in '{location}'.")
+    
+    # Step 1: Find the revision to roll back to
+    stable_rev_report = get_previous_stable_revision(
+        project_id=GCP_PROJECT_ID,
+        location=location,
+        service_id=service_id
+    )
+    if stable_rev_report.get("status") != "SUCCESS":
+        error_msg = f"Rollback FAILED: Could not identify a previous stable revision. Reason: {stable_rev_report.get('error_message')}"
+        logging.error(error_msg)
+        return error_msg
+        
+    revision_to_restore = stable_rev_report.get("previous_stable_revision_name")
+    
+    # Step 2: Redirect traffic
+    redirect_report = redirect_traffic_to_revision(
+        project_id=GCP_PROJECT_ID,
+        location=location,
+        service_id=service_id,
+        revision_name=revision_to_restore
+    )
+    
+    if redirect_report.get("status") == "SUCCESS":
+        success_msg = f"Rollback SUCCESS: Traffic for '{service_id}' has been redirected to previous stable revision '{revision_to_restore.split('/')[-1]}'."
+        logging.info(success_msg)
+        return success_msg
+    else:
+        error_msg = f"Rollback FAILED: Attempted to redirect traffic, but failed. Reason: {redirect_report.get('error_message')}"
+        logging.error(error_msg)
+        return error_msg
 
 # --- MOA Tool Definitions ---
 def execute_smart_deploy_workflow(
@@ -124,9 +164,31 @@ def execute_smart_deploy_workflow(
         project_id=GCP_PROJECT_ID, region=TARGET_APP_CLOUD_RUN_REGION,
         service_name=TARGET_APP_CLOUD_RUN_SERVICE_NAME, image_uri=image_uri_commit
     )
-    final_summary.append(f"4. DA Report: {da_report.get('message', da_report.get('error_message'))}")
+    final_summary.append(f"4. Deployment: {da_report.get('message', da_report.get('error_message'))}")
     if da_report.get("status") != "SUCCESS":
         return "\n".join(final_summary)
+
+    # MODIFIED: Step 5 - Post-Deployment Health Check & Potential Rollback
+    logging.info("MOA Tool (Smart Deploy): [Step 5/5] Performing post-deployment health check...")
+    health_check_raw_data = execute_health_check_workflow(
+        service_id=TARGET_APP_CLOUD_RUN_SERVICE_NAME,
+        location=TARGET_APP_CLOUD_RUN_REGION,
+        time_window_minutes=5 # Check a short window right after deployment
+    )
+    
+    # Simple check for health issues based on raw data.
+    # A more advanced check could use another LLM call to interpret the health data.
+    if "Error Count (4xx+5xx): 0" not in health_check_raw_data: # Simple heuristic for errors
+        final_summary.append("5. Post-Deployment Health Check: FAILED - Errors detected after deployment.")
+        logging.warning("Deployment appears unhealthy, initiating automated rollback.")
+        
+        rollback_summary = execute_rollback_workflow(
+            service_id=TARGET_APP_CLOUD_RUN_SERVICE_NAME,
+            location=TARGET_APP_CLOUD_RUN_REGION
+        )
+        final_summary.append(f"   Rollback Action: {rollback_summary}")
+    else:
+        final_summary.append("5. Post-Deployment Health Check: PASSED - No immediate issues detected.")
         
     return "\n".join(final_summary)
 
@@ -179,21 +241,21 @@ root_agent = LlmAgent(
     description=(
         "The Master Orchestrator Agent for the GeminiFlow DevSecOps Co-Pilot."
     ),
-    instruction=(
-        "You are the Master Orchestrator for a DevSecOps & FinOps system called GeminiFlow. "
-        "You have specialized sub-agents for Source Control (SCA), Build & Test (BTA), Deployment (DA), "
-        "Monitoring & Diagnostics (MDA), Security Scanning, and FinOps. Your primary roles are to manage secure deployments, provide health checks, and report on costs. "
-        "\n1. For DEPLOYMENTS: When a user asks to deploy an application, this automatically includes a security scan. Use the 'execute_smart_deploy_workflow' tool. Summarize the result, making sure to clearly state the outcome of tests and the security scan."
-        "\n2. For HEALTH CHECKS: When a user asks for the health or status of a service, use the 'execute_health_check_workflow' tool. The tool will return raw data; you MUST summarize this into a concise, human-readable health report."
-        "\n3. For COST REPORTS: When a user asks about costs or spending, use the 'execute_finops_report_workflow' tool and summarize the raw data it returns."
+     instruction=(
+        "You are the Master Orchestrator for a DevSecOps system called GeminiFlow. "
+        "You have specialized sub-agents. Your primary roles are to manage secure, resilient deployments and provide health checks. "
+        "\n1. For DEPLOYMENTS: When a user asks to deploy an application, use the 'execute_smart_deploy_workflow' tool. "
+        "This is a comprehensive workflow that includes building, testing, security scanning, deploying, and "
+        "if the post-deployment health check fails, it will automatically roll back to the previous version. "
+        "Summarize the final outcome for the user, clearly stating if a rollback occurred."
+        "\n2. For HEALTH CHECKS: When a user asks for the health or status of a service, use the 'execute_health_check_workflow' tool and summarize the raw data it returns."
     ),
     tools=[
         execute_smart_deploy_workflow,
         execute_health_check_workflow,
         execute_finops_report_workflow
     ],
-    # MODIFIED: Corrected to use 'secops_agent'
-    sub_agents=[sca_agent, bta_agent, da_agent, mda_agent, finops_agent, secops_agent]
+    sub_agents=[sca_agent, bta_agent, da_agent, mda_agent, finops_agent, secops_agent, rollback_agent]
 )
 
 # --- Local Testing ---
