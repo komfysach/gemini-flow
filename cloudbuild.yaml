@@ -1,8 +1,69 @@
 steps:
-  - name: "gcr.io/cloud-builders/gcloud"
+  # Step 1: Build the Docker image
+  - name: "gcr.io/cloud-builders/docker"
     args:
       [
-        "echo",
-        "Build and Test Triggered from GitHub for GeminiFlow! Commit ID $COMMIT_SHA",
+        "build",
+        "-t",
+        "${_AR_HOSTNAME}/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:${COMMIT_SHA}",
+        "-t",
+        "${_AR_HOSTNAME}/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:latest",
+        ".",
       ]
-# @Todo add actual build/test steps later
+    id: "build-image"
+
+  # Step 2: Push the commit-tagged image
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      [
+        "push",
+        "${_AR_HOSTNAME}/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:${COMMIT_SHA}",
+      ]
+    id: "push-commit-image"
+
+  # Step 3: Push the latest-tagged image
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      ["push", "${_AR_HOSTNAME}/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:latest"]
+    id: "push-latest-image"
+
+  # Step 4: Run tests (optional)
+  - name: "${_AR_HOSTNAME}/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:${COMMIT_SHA}"
+    entrypoint: "python"
+    args:
+      [
+        "-m",
+        "pytest",
+        "tests/",
+        "-v",
+        "--tb=short",
+        "--json-report",
+        "--json-report-file=/workspace/test_results.json",
+      ]
+    id: "run-tests"
+    env:
+      - "PYTHONUNBUFFERED=1"
+      - "LOG_LEVEL=INFO"
+
+  # Step 5: Upload test results to GCS
+  - name: "gcr.io/cloud-builders/gsutil"
+    args:
+      [
+        "cp",
+        "/workspace/test_results.json",
+        "gs://${_TEST_RESULTS_BUCKET}/test-results/${COMMIT_SHA}/test_results.json",
+      ]
+    id: "upload-test-results"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  env:
+    - "PYTHONUNBUFFERED=1"
+
+substitutions:
+  _AR_HOSTNAME: us-central1-docker.pkg.dev
+  _REPOSITORY: gemini-flow-apps
+  _IMAGE: gemini-flow-hello-world
+  _TEST_RESULTS_BUCKET: gemini-flow-build-artifacts
+
+timeout: 1200s
