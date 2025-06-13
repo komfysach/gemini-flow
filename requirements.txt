@@ -1,0 +1,22 @@
+# Web server
+fastapi
+uvicorn
+
+# Core ADK library (as specified)
+google-adk==1.0.0
+
+# Helper for environment variables
+python-dotenv
+
+# GitHub API access for SCA
+PyGithub
+
+# Google Cloud client libraries for various agents
+google-cloud-build==3.31.1
+google-cloud-storage
+google-cloud-run==0.10.18
+google-cloud-monitoring
+google-cloud-logging==3.12.1
+google-cloud-containeranalysis
+google-cloud-bigquery
+google-generativeai
