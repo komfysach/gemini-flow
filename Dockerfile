@@ -14,9 +14,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 # into the container's /app directory.
 COPY ./multi_tool_agent/ .
 
+# Set environment variables for better logging in containers
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONIOENCODING=utf-8
+ENV LOG_LEVEL=INFO
+
 # Expose port 8080 to the outside world
 EXPOSE 8080
 
-# Command to run the API server when the container launches
-# This remains the same, as main_api.py will now be at the root of /app
-CMD ["uvicorn", "main_api:app", "--host", "0.0.0.0", "--port", "8080"]
+# Command to run the API server with proper logging configuration
+CMD ["uvicorn", "main_api:app", "--host", "0.0.0.0", "--port", "8080", "--log-level", "info", "--access-log"]
