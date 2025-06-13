@@ -100,7 +100,7 @@ def execute_rollback_workflow(service_id: str, location: str) -> str:
     
 def plan_new_environment(
     new_service_name: str,
-    image_uri_to_deploy: str = "latest", # MODIFIED: Make this optional and default to "latest"
+    image_uri_to_deploy: str = "latest",
     region: str = TARGET_APP_CLOUD_RUN_REGION
 ) -> str:
     """
@@ -109,17 +109,14 @@ def plan_new_environment(
     """
     logging.info(f"MOA Tool (Infra Plan): Planning new service '{new_service_name}'.")
 
-    # MODIFIED: Logic to determine the final image URI
     final_image_uri = ""
     if image_uri_to_deploy.lower() == "latest":
-        # Construct the known ':latest' URI from configuration
         final_image_uri = (
             f"{TARGET_APP_CLOUD_RUN_REGION}-docker.pkg.dev/{GCP_PROJECT_ID}/"
             f"{INFRA_DEFAULT_IMAGE_REPO}/{INFRA_DEFAULT_IMAGE_NAME}:latest"
         )
-        logging.info(f"MOA Tool (Infra Plan): 'latest' keyword detected. Using default image URI: {final_image_uri}")
+        logging.info(f"MOA Tool (Infra Plan): Using default image URI: {final_image_uri}")
     else:
-        # Use the specific URI provided by the LLM
         final_image_uri = image_uri_to_deploy
         logging.info(f"MOA Tool (Infra Plan): Using specific image URI provided: {final_image_uri}")
 
@@ -132,12 +129,14 @@ def plan_new_environment(
     if plan_report.get("status") != "SUCCESS":
         return f"Terraform plan FAILED. Reason: {plan_report.get('error_message')}"
     
-    return plan_report.get("plan_summary", "Plan completed, but summary is unavailable.")
+    # In a real app, you would parse the log URL to get the plan output and summarize it with Gemini.
+    # For now, we return a simpler message asking for user approval.
+    return f"Terraform plan completed successfully. Please review the plan in the build logs before applying. Log URL: {plan_report.get('log_url')}. Do you want to apply this plan?"
 
 
 def apply_new_environment(
     new_service_name: str,
-    image_uri_to_deploy: str = "latest", # MODIFIED: Also make this optional for consistency
+    image_uri_to_deploy: str = "latest",
     region: str = TARGET_APP_CLOUD_RUN_REGION
 ) -> str:
     """
@@ -146,17 +145,14 @@ def apply_new_environment(
     """
     logging.info(f"MOA Tool (Infra Apply): Applying plan for new service '{new_service_name}'.")
     
-    # MODIFIED: Logic to determine the final image URI is duplicated here for the apply step
     final_image_uri = ""
     if image_uri_to_deploy.lower() == "latest":
         final_image_uri = (
             f"{TARGET_APP_CLOUD_RUN_REGION}-docker.pkg.dev/{GCP_PROJECT_ID}/"
             f"{INFRA_DEFAULT_IMAGE_REPO}/{INFRA_DEFAULT_IMAGE_NAME}:latest"
         )
-        logging.info(f"MOA Tool (Infra Apply): 'latest' keyword detected. Using default image URI: {final_image_uri}")
     else:
         final_image_uri = image_uri_to_deploy
-        logging.info(f"MOA Tool (Infra Apply): Using specific image URI provided: {final_image_uri}")
 
     apply_report = run_terraform_apply(
         new_service_name=new_service_name,
