@@ -11,6 +11,9 @@ python-dotenv
 # GitHub API access for SCA
 PyGithub
 
+# For testing
+pytest
+
 # Google Cloud client libraries for various agents
 google-cloud-build==3.31.1
 google-cloud-storage
