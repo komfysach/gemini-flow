@@ -1,13 +1,13 @@
 # main_api.py
 
 import logging
+import os # Import os for path manipulation
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 # Import your main agent instance from agent.py
-# This assumes your MOA instance is named 'agent' in that file
 try:
     from agent import agent as moa_agent
     logging.info("Successfully imported Master Orchestrator Agent.")
@@ -18,6 +18,21 @@ except ImportError as e:
 # Configure the FastAPI app
 app = FastAPI()
 logging.basicConfig(level=logging.INFO)
+
+# MODIFIED: Construct an absolute path to the 'static' directory
+# This ensures that the path is correct whether run directly or via pytest.
+# __file__ gives the path to the current script (main_api.py)
+# os.path.dirname gets the directory of the script
+# os.path.join combines it with 'static' to create a reliable path
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+if not os.path.isdir(STATIC_DIR):
+    # This check helps during local development if the directory is missing
+    logging.warning(f"Static directory not found at: {STATIC_DIR}. Root path will work, but static files may not.")
+else:
+     # Mount the static directory to serve the HTML, CSS, JS files
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
 
 class UserQuery(BaseModel):
     query: str
@@ -55,9 +70,12 @@ async def invoke_agent(user_query: UserQuery):
         logging.exception(f"An error occurred while invoking the agent.")
         raise HTTPException(status_code=500, detail=f"An internal error occurred: {e}")
 
-# Mount a static directory to serve the HTML file
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/")
 async def read_root():
-    return FileResponse('static/index.html')
+    # Use the absolute path for the FileResponse as well for robustness
+    index_html_path = os.path.join(STATIC_DIR, "index.html")
+    if os.path.exists(index_html_path):
+        return FileResponse(index_html_path)
+    else:
+        raise HTTPException(status_code=404, detail="index.html not found.")
