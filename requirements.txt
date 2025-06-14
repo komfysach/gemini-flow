@@ -14,6 +14,8 @@ PyGithub
 # For testing
 pytest
 pytest-json-report==1.5.0
+pytest-mock==3.12.0  # For the mocker fixture used in tests
+pytest-cov==4.1.0    # For test coverage reporting (optional but recommended)
 
 # Google Cloud client libraries for various agents
 google-cloud-build==3.31.1
@@ -24,3 +26,8 @@ google-cloud-logging==3.12.1
 google-cloud-containeranalysis
 google-cloud-bigquery
 google-generativeai
+
+# Additional testing utilities
+mock==5.1.0           # Standalone mock library (backup for unittest.mock)
+responses==0.24.1     # For mocking HTTP requests (useful for API testing)
+freezegun==1.2.2      # For mocking time/dates in tests (optional)
