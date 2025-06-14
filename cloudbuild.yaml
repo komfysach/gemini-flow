@@ -62,7 +62,7 @@ options:
 
 substitutions:
   _AR_HOSTNAME: us-central1-docker.pkg.dev
-  _REPOSITORY: gemini-flow
+  _REPOSITORY: gemini-flow-apps
   _IMAGE: gemini-flow-service
   _TEST_RESULTS_BUCKET: gemini-flow-build-artifacts
 
