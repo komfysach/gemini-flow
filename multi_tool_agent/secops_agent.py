@@ -76,7 +76,7 @@ def get_vulnerability_scan_results(image_uri_with_digest: str) -> dict:
             for occurrence in page_result:
                 vulnerability = occurrence.vulnerability
                 vuln_details = {
-                    "severity": containeranalysis_v1.Severity(vulnerability.severity).name,
+                    "severity": vulnerability.severity,
                     "cvss_score": vulnerability.cvss_score,
                     "package": vulnerability.package_issue[0].affected_package if vulnerability.package_issue else "N/A",
                     "version": vulnerability.package_issue[0].affected_version.full_name if vulnerability.package_issue else "N/A",
