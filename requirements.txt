@@ -13,6 +13,7 @@ PyGithub
 
 # For testing
 pytest
+pytest-json-report==1.5.0
 
 # Google Cloud client libraries for various agents
 google-cloud-build==3.31.1
