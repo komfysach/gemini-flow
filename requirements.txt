@@ -1,6 +1,8 @@
 # Web server
 fastapi
 uvicorn
+asyncio
+pydantic
 
 # Core ADK library (as specified)
 google-adk==1.0.0
