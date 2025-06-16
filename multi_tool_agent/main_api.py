@@ -29,17 +29,14 @@ async def invoke_agent(user_query: UserQuery):
     query = user_query.query
     if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
-    if len(query) > 10000:
-        raise HTTPException(status_code=400, detail="Query too long (max 10,000 characters).")
 
     logging.info(f"Received query for ADK CLI: '{query}'")
 
     try:
-        # The 'adk' command should be in the PATH inside the container.
-        # We run it from the /app directory where all our agent files are.
-        # We use --non-interactive to feed input and get output without a persistent TTY.
+        # The script will now write to stdin and close it, which signals the end of input
+        # for a non-interactive session.
         process = await asyncio.create_subprocess_exec(
-            'adk', 'run', '.', '--non-interactive',
+            'adk', 'run', 'agent:agent',
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -49,10 +46,10 @@ async def invoke_agent(user_query: UserQuery):
         # Send the user's query to the agent's stdin and close the pipe.
         process.stdin.write(query.encode())
         await process.stdin.drain()
-        process.stdin.close()
+        process.stdin.close() # Closing stdin signals to the process that there is no more input.
 
-        # Read the response from stdout and any errors from stderr
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=1200) # 20-minute timeout
+        # Use asyncio.wait_for for a compatible timeout mechanism.
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=1200)
 
         # Decode the output
         response_text = stdout.decode().strip()
@@ -65,16 +62,13 @@ async def invoke_agent(user_query: UserQuery):
         # Check if the process exited cleanly
         if process.returncode != 0:
             logging.error(f"ADK subprocess exited with code {process.returncode}")
-            # Return the stderr as the error detail if available
             error_detail = error_text or f"ADK subprocess failed with exit code {process.returncode}."
             raise HTTPException(status_code=500, detail=error_detail)
 
-        # The ADK CLI output includes "[user]:" and "[agent_name]:" prefixes. We need to clean this up.
-        # We will find the last agent response block.
+        # Clean up the CLI output to find the final agent response
         last_response = ""
         for line in response_text.split('\n'):
             if not line.strip().startswith('[user]:'):
-                # Strip the agent name prefix like "[geminiflow_master_orchestrator_agent]: "
                 if ']: ' in line:
                     last_response = line.split(']: ', 1)[1]
                 else:
