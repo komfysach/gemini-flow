@@ -29,6 +29,8 @@ async def invoke_agent(user_query: UserQuery):
     query = user_query.query
     if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
+    if len(query) > 10000:
+        raise HTTPException(status_code=400, detail="Query too long (max 10,000 characters).")
 
     logging.info(f"Received query for ADK CLI: '{query}'")
 
@@ -50,8 +52,7 @@ async def invoke_agent(user_query: UserQuery):
         process.stdin.close()
 
         # Read the response from stdout and any errors from stderr
-        # Increased timeout for potentially long workflows
-        stdout, stderr = await process.communicate(timeout=1200) # 20-minute timeout
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=1200) # 20-minute timeout
 
         # Decode the output
         response_text = stdout.decode().strip()
