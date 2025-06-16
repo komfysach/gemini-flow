@@ -308,7 +308,7 @@ def execute_finops_report_workflow(
 
 
 # --- ADK Agent Definition for MOA ---
-root_agent = LlmAgent(
+agent = LlmAgent(
     name="geminiflow_master_orchestrator_agent",
     model="gemini-2.0-flash",
     description=(
