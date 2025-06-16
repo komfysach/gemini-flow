@@ -1,38 +1,21 @@
 # main_api.py
 
 import logging
-import os # Import os for path manipulation
+import asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+import os
 
-# Import your main agent instance from agent.py
-try:
-    from agent import agent as moa_agent
-    logging.info("Successfully imported Master Orchestrator Agent.")
-except ImportError as e:
-    logging.critical(f"Fatal: Could not import the main agent. Error: {e}")
-    moa_agent = None
+# NOTE: We do not import the agent directly, as we will run it as a subprocess.
 
 # Configure the FastAPI app
 app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 
-# MODIFIED: Construct an absolute path to the 'static' directory
-# This ensures that the path is correct whether run directly or via pytest.
-# __file__ gives the path to the current script (main_api.py)
-# os.path.dirname gets the directory of the script
-# os.path.join combines it with 'static' to create a reliable path
+# Construct an absolute path to the 'static' directory
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
-
-if not os.path.isdir(STATIC_DIR):
-    # This check helps during local development if the directory is missing
-    logging.warning(f"Static directory not found at: {STATIC_DIR}. Root path will work, but static files may not.")
-else:
-     # Mount the static directory to serve the HTML, CSS, JS files
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
 
 class UserQuery(BaseModel):
     query: str
@@ -40,40 +23,78 @@ class UserQuery(BaseModel):
 @app.post("/invoke")
 async def invoke_agent(user_query: UserQuery):
     """
-    This endpoint receives a user's query, passes it to the MOA,
-    and returns the agent's response.
+    This endpoint receives a user's query, starts the ADK CLI as a subprocess,
+    sends the query to it, and returns the agent's response.
     """
-    if not moa_agent:
-        raise HTTPException(status_code=500, detail="Master Orchestrator Agent is not available due to import errors.")
+    query = user_query.query
+    if not query:
+        raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
-    logging.info(f"Received query for MOA: '{user_query.query}'")
+    logging.info(f"Received query for ADK CLI: '{query}'")
+
     try:
-        # Use the invoke method that works for your ADK version
-        response_data = moa_agent.invoke({"text": user_query.query})
+        # The 'adk' command should be in the PATH inside the container.
+        # We run it from the /app directory where all our agent files are.
+        # We use --non-interactive to feed input and get output without a persistent TTY.
+        process = await asyncio.create_subprocess_exec(
+            'adk', 'run', '.', '--non-interactive',
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd='/app' # Ensure it runs in the correct directory inside the container
+        )
+
+        # Send the user's query to the agent's stdin and close the pipe.
+        process.stdin.write(query.encode())
+        await process.stdin.drain()
+        process.stdin.close()
+
+        # Read the response from stdout and any errors from stderr
+        # Increased timeout for potentially long workflows
+        stdout, stderr = await process.communicate(timeout=1200) # 20-minute timeout
+
+        # Decode the output
+        response_text = stdout.decode().strip()
+        error_text = stderr.decode().strip()
+
+        # Log any errors from the subprocess
+        if error_text:
+            logging.error(f"ADK subprocess stderr: {error_text}")
+
+        # Check if the process exited cleanly
+        if process.returncode != 0:
+            logging.error(f"ADK subprocess exited with code {process.returncode}")
+            # Return the stderr as the error detail if available
+            error_detail = error_text or f"ADK subprocess failed with exit code {process.returncode}."
+            raise HTTPException(status_code=500, detail=error_detail)
+
+        # The ADK CLI output includes "[user]:" and "[agent_name]:" prefixes. We need to clean this up.
+        # We will find the last agent response block.
+        last_response = ""
+        for line in response_text.split('\n'):
+            if not line.strip().startswith('[user]:'):
+                # Strip the agent name prefix like "[geminiflow_master_orchestrator_agent]: "
+                if ']: ' in line:
+                    last_response = line.split(']: ', 1)[1]
+                else:
+                    last_response = line
         
-        logging.info(f"MOA returned: {response_data}")
+        logging.info(f"Returning final processed response: {last_response}")
+        return {"response": last_response or "Agent processed the request but returned no text."}
 
-        # Extract the final text response to send back to the UI
-        final_text = response_data.get("text", "")
-        tool_output = response_data.get("tool_response", "")
-
-        # Combine the LLM text and tool output for a comprehensive response
-        if tool_output and isinstance(tool_output, str):
-            if final_text:
-                final_text += f"\n\n--- Workflow Execution Log ---\n{tool_output}"
-            else:
-                final_text = tool_output
-
-        return {"response": final_text or "The agent processed the request but returned no text."}
-
+    except asyncio.TimeoutError:
+        logging.error("Agent invocation timed out.")
+        raise HTTPException(status_code=504, detail="The agent workflow took too long to complete.")
     except Exception as e:
-        logging.exception(f"An error occurred while invoking the agent.")
-        raise HTTPException(status_code=500, detail=f"An internal error occurred: {e}")
+        logging.exception(f"An error occurred while running the ADK subprocess.")
+        raise HTTPException(status_code=500, detail=f"An internal server error occurred: {e}")
 
+# Mount a static directory to serve the HTML file
+if os.path.isdir(STATIC_DIR):
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.get("/")
 async def read_root():
-    # Use the absolute path for the FileResponse as well for robustness
     index_html_path = os.path.join(STATIC_DIR, "index.html")
     if os.path.exists(index_html_path):
         return FileResponse(index_html_path)
