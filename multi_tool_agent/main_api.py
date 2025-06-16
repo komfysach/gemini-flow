@@ -33,10 +33,8 @@ async def invoke_agent(user_query: UserQuery):
     logging.info(f"Received query for ADK CLI: '{query}'")
 
     try:
-        # The script will now write to stdin and close it, which signals the end of input
-        # for a non-interactive session.
         process = await asyncio.create_subprocess_exec(
-            'adk', 'run', 'agent:agent',
+            'adk', 'run', 'agent.agent',
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
