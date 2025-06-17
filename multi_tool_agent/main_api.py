@@ -7,8 +7,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import os
+import uuid # To generate unique session IDs
 
-# Import the Runner, agent, and the default session service
+# MODIFIED: Import the Runner, agent, and the default session service
 try:
     from agent import agent as moa_agent
     from google.adk.runners import Runner
@@ -26,10 +27,11 @@ logging.basicConfig(level=logging.INFO)
 
 # Create a single runner instance for the application
 if moa_agent and Runner and InMemorySessionService:
+    # Initialize the Runner with the required arguments
     runner = Runner(
         agent=moa_agent,
-        app_name="geminiflow",
-        session_service=InMemorySessionService()
+        app_name="geminiflow", # Provide a name for the app
+        session_service=InMemorySessionService() # Provide the default session service
     )
 else:
     runner = None
@@ -56,7 +58,16 @@ async def invoke_agent(user_query: UserQuery):
 
     try:
         final_response_text = ""
-        async for event in runner.run_async(request={"text": query}):
+        # MODIFIED: Changed the call to use the documented keyword arguments.
+        # We generate a new session ID for each interaction to keep them separate.
+        session_id = str(uuid.uuid4())
+        user_id = "geminiflow-webapp-user"
+        
+        async for event in runner.run_async(
+            new_message={"text": query},
+            session_id=session_id,
+            user_id=user_id
+        ):
             if event.type == "text" and event.data.get("text"):
                 # Accumulate the response text from all text events
                 final_response_text += event.data["text"]
