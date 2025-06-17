@@ -60,13 +60,11 @@ async def invoke_agent(user_query: UserQuery):
         final_response_text = ""
         # MODIFIED: Changed the call to use the documented keyword arguments.
         # We generate a new session ID for each interaction to keep them separate.
-        session_id = str(uuid.uuid4())
-        user_id = "geminiflow-webapp-user"
+        # session_id = str(uuid.uuid4())
+        # user_id = "geminiflow-webapp-user"
         
         async for event in runner.run_async(
             new_message={"text": query},
-            session_id=session_id,
-            user_id=user_id
         ):
             if event.type == "text" and event.data.get("text"):
                 # Accumulate the response text from all text events
