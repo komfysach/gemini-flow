@@ -33,8 +33,10 @@ APP_NAME = "geminiflow"
 USER_ID = "webapp_user_01"
 SESSION_ID = "shared_session_01"
 
+# Global runner variable
+runner = None
 
-@app("startup")
+@app.on_event("startup")  # FIXED: Correct decorator syntax
 async def startup_event():
     """
     On application startup, initialize the ADK Runner and create the
@@ -62,7 +64,6 @@ async def startup_event():
     else:
         logging.critical("Runner could not be initialized due to import errors.")
 
-
 # Construct an absolute path to the 'static' directory
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
@@ -75,17 +76,23 @@ async def invoke_agent(user_query: UserQuery):
     This endpoint receives a user's query, uses the ADK Runner to process it
     within the pre-existing shared session, and returns the final response.
     """
-    query = user_query.query
+    query = user_query.query.strip() if user_query.query else ""
+    
     if not runner:
         raise HTTPException(status_code=500, detail="Agent Runner is not available. Check startup logs.")
     if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
-    logging.info(f"Received query for Runner: '{query}' in session {SESSION_ID}")
+    logging.info(f"Received query for Runner: '{query[:100]}{'...' if len(query) > 100 else ''}' in session {SESSION_ID}")
 
     try:
         final_response_text = ""
-        user_content_message = genai_types.Content(role='user', parts=[genai_types.Part(text=query)])
+        
+        # Create the user content message
+        user_content_message = genai_types.Content(
+            role='user', 
+            parts=[genai_types.Part(text=query)]
+        )
         
         # Call run_async with the fixed user_id and session_id
         async for event in runner.run_async(
@@ -93,15 +100,27 @@ async def invoke_agent(user_query: UserQuery):
             session_id=SESSION_ID,
             user_id=USER_ID
         ):
+            logging.debug(f"Received event: type={event.type}, data={event.data}")
+            
             if event.type == "text" and event.data.get("text"):
                 final_response_text += event.data["text"]
+            elif event.type == "error":
+                error_msg = event.data.get("error", "Unknown error occurred")
+                logging.error(f"Agent error event: {error_msg}")
+                raise HTTPException(status_code=500, detail=f"Agent error: {error_msg}")
 
-        logging.info(f"Returning final processed response from Runner for session {SESSION_ID}.")
+        # Clean up the response
+        final_response_text = final_response_text.strip()
+        
+        logging.info(f"Returning final processed response from Runner for session {SESSION_ID}: {len(final_response_text)} characters")
         return {"response": final_response_text or "Agent processed the request but returned no text."}
 
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
-        logging.exception(f"An error occurred while running the agent with the ADK Runner.")
-        raise HTTPException(status_code=500, detail=f"An internal server error occurred: {e}")
+        logging.exception("An error occurred while running the agent with the ADK Runner.")
+        raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
 
 # Mount a static directory to serve the HTML file
 if os.path.isdir(STATIC_DIR):
@@ -109,8 +128,19 @@ if os.path.isdir(STATIC_DIR):
 
 @app.get("/")
 async def read_root():
+    """Serve the main UI page."""
     index_html_path = os.path.join(STATIC_DIR, "index.html")
     if os.path.exists(index_html_path):
         return FileResponse(index_html_path)
     else:
         raise HTTPException(status_code=404, detail="index.html not found.")
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for monitoring."""
+    return {
+        "status": "healthy" if runner else "degraded",
+        "service": "geminiflow-api",
+        "runner_available": runner is not None,
+        "session_id": SESSION_ID if runner else None
+    }
