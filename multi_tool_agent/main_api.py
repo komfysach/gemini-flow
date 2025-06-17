@@ -26,11 +26,10 @@ logging.basicConfig(level=logging.INFO)
 
 # Create a single runner instance for the application
 if moa_agent and Runner and InMemorySessionService:
-    # Initialize the Runner with the required arguments
     runner = Runner(
         agent=moa_agent,
-        app_name="gemini-flow", # Provide a name for the app
-        session_service=InMemorySessionService() # Provide the default session service
+        app_name="geminiflow",
+        session_service=InMemorySessionService()
     )
 else:
     runner = None
@@ -57,8 +56,7 @@ async def invoke_agent(user_query: UserQuery):
 
     try:
         final_response_text = ""
-        # The Runner.run_async method is an async generator that yields events.
-        async for event in runner.run_async({"text": query}):
+        async for event in runner.run_async(request={"text": query}):
             if event.type == "text" and event.data.get("text"):
                 # Accumulate the response text from all text events
                 final_response_text += event.data["text"]
