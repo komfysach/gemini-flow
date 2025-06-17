@@ -34,7 +34,7 @@ USER_ID = "webapp_user_01"
 SESSION_ID = "shared_session_01"
 
 
-@app.lifespan("startup")
+@app("startup")
 async def startup_event():
     """
     On application startup, initialize the ADK Runner and create the
