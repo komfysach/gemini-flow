@@ -8,11 +8,25 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import os
 
-# NOTE: We do not import the agent directly, as we will run it as a subprocess.
+# Import the Runner and the agent instance directly
+try:
+    from agent import agent as moa_agent
+    from google.adk.runners import Runner
+    logging.info("Successfully imported Master Orchestrator Agent and ADK Runner.")
+except ImportError as e:
+    logging.critical(f"Fatal: Could not import the main agent or ADK Runner. Error: {e}")
+    moa_agent = None
+    Runner = None
 
 # Configure the FastAPI app
 app = FastAPI()
 logging.basicConfig(level=logging.INFO)
+
+# Create a single runner instance for the application
+if moa_agent and Runner:
+    runner = Runner(agent=moa_agent)
+else:
+    runner = None
 
 # Construct an absolute path to the 'static' directory
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -23,63 +37,34 @@ class UserQuery(BaseModel):
 @app.post("/invoke")
 async def invoke_agent(user_query: UserQuery):
     """
-    This endpoint receives a user's query, starts the ADK CLI as a subprocess,
-    sends the query to it, and returns the agent's response.
+    This endpoint receives a user's query, uses the ADK Runner to process it,
+    and returns the final response.
     """
     query = user_query.query
+    if not runner:
+        raise HTTPException(status_code=500, detail="Agent Runner is not available due to import errors.")
     if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
-    logging.info(f"Received query for ADK CLI: '{query}'")
+    logging.info(f"Received query for Runner: '{query}'")
 
     try:
-        process = await asyncio.create_subprocess_exec(
-            'adk', 'run', 'agent.agent',
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd='/app' # Ensure it runs in the correct directory inside the container
-        )
+        final_response_text = ""
+        # The Runner.run_async method is an async generator that yields events.
+        # We will loop through it and build the final response.
+        async for event in runner.run_async({"text": query}):
+            # We are interested in the 'text' events which contain the agent's textual output.
+            if event.type == "text" and event.data.get("text"):
+                # A more complex UI might render these as they arrive.
+                # For a simple request/response, we can concatenate them or just take the last one.
+                # Let's accumulate them for a full log-like response.
+                final_response_text += event.data["text"]
 
-        # Send the user's query to the agent's stdin and close the pipe.
-        process.stdin.write(query.encode())
-        await process.stdin.drain()
-        process.stdin.close() # Closing stdin signals to the process that there is no more input.
+        logging.info(f"Returning final processed response from Runner.")
+        return {"response": final_response_text or "Agent processed the request but returned no text."}
 
-        # Use asyncio.wait_for for a compatible timeout mechanism.
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=1200)
-
-        # Decode the output
-        response_text = stdout.decode().strip()
-        error_text = stderr.decode().strip()
-
-        # Log any errors from the subprocess
-        if error_text:
-            logging.error(f"ADK subprocess stderr: {error_text}")
-
-        # Check if the process exited cleanly
-        if process.returncode != 0:
-            logging.error(f"ADK subprocess exited with code {process.returncode}")
-            error_detail = error_text or f"ADK subprocess failed with exit code {process.returncode}."
-            raise HTTPException(status_code=500, detail=error_detail)
-
-        # Clean up the CLI output to find the final agent response
-        last_response = ""
-        for line in response_text.split('\n'):
-            if not line.strip().startswith('[user]:'):
-                if ']: ' in line:
-                    last_response = line.split(']: ', 1)[1]
-                else:
-                    last_response = line
-        
-        logging.info(f"Returning final processed response: {last_response}")
-        return {"response": last_response or "Agent processed the request but returned no text."}
-
-    except asyncio.TimeoutError:
-        logging.error("Agent invocation timed out.")
-        raise HTTPException(status_code=504, detail="The agent workflow took too long to complete.")
     except Exception as e:
-        logging.exception(f"An error occurred while running the ADK subprocess.")
+        logging.exception(f"An error occurred while running the agent with the ADK Runner.")
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {e}")
 
 # Mount a static directory to serve the HTML file
