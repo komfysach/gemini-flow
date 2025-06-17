@@ -8,23 +8,30 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import os
 
-# Import the Runner and the agent instance directly
+# Import the Runner, agent, and the default session service
 try:
     from agent import agent as moa_agent
     from google.adk.runners import Runner
-    logging.info("Successfully imported Master Orchestrator Agent and ADK Runner.")
+    from google.adk.sessions import InMemorySessionService
+    logging.info("Successfully imported Master Orchestrator Agent and ADK components.")
 except ImportError as e:
-    logging.critical(f"Fatal: Could not import the main agent or ADK Runner. Error: {e}")
+    logging.critical(f"Fatal: Could not import the main agent or ADK components. Error: {e}")
     moa_agent = None
     Runner = None
+    InMemorySessionService = None
 
 # Configure the FastAPI app
 app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 
 # Create a single runner instance for the application
-if moa_agent and Runner:
-    runner = Runner(agent=moa_agent)
+if moa_agent and Runner and InMemorySessionService:
+    # Initialize the Runner with the required arguments
+    runner = Runner(
+        agent=moa_agent,
+        app_name="gemini-flow", # Provide a name for the app
+        session_service=InMemorySessionService() # Provide the default session service
+    )
 else:
     runner = None
 
@@ -51,13 +58,9 @@ async def invoke_agent(user_query: UserQuery):
     try:
         final_response_text = ""
         # The Runner.run_async method is an async generator that yields events.
-        # We will loop through it and build the final response.
         async for event in runner.run_async({"text": query}):
-            # We are interested in the 'text' events which contain the agent's textual output.
             if event.type == "text" and event.data.get("text"):
-                # A more complex UI might render these as they arrive.
-                # For a simple request/response, we can concatenate them or just take the last one.
-                # Let's accumulate them for a full log-like response.
+                # Accumulate the response text from all text events
                 final_response_text += event.data["text"]
 
         logging.info(f"Returning final processed response from Runner.")
