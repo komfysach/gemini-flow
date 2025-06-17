@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import os
+import uuid
 
 # MODIFIED: Import the Runner, agent, session service, and genai types
 try:
@@ -29,14 +30,12 @@ logging.basicConfig(level=logging.INFO)
 # --- MODIFIED: Global variables for the Runner and a fixed session ---
 # For this web app, we will use a single, fixed session for all users
 # to exactly match the documentation's pattern and resolve the "Session not found" error.
-APP_NAME = "geminiflow"
+APP_NAME = "gemini-flow"
 USER_ID = "webapp_user_01"
 SESSION_ID = "shared_session_01"
 
-# Global runner variable
-runner = None
 
-@app.on_event("startup")  # FIXED: Correct decorator syntax
+@app.on_event("startup")
 async def startup_event():
     """
     On application startup, initialize the ADK Runner and create the
@@ -64,6 +63,7 @@ async def startup_event():
     else:
         logging.critical("Runner could not be initialized due to import errors.")
 
+
 # Construct an absolute path to the 'static' directory
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
@@ -76,51 +76,41 @@ async def invoke_agent(user_query: UserQuery):
     This endpoint receives a user's query, uses the ADK Runner to process it
     within the pre-existing shared session, and returns the final response.
     """
-    query = user_query.query.strip() if user_query.query else ""
-    
-    if not runner:
+    query = user_query.query
+    if not runner or not genai_types:
         raise HTTPException(status_code=500, detail="Agent Runner is not available. Check startup logs.")
     if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
-    logging.info(f"Received query for Runner: '{query[:100]}{'...' if len(query) > 100 else ''}' in session {SESSION_ID}")
+    logging.info(f"Received query for Runner: '{query}' in session {SESSION_ID}")
 
     try:
-        final_response_text = ""
+        final_response_text = "Agent did not produce a final response."
         
-        # Create the user content message
-        user_content_message = genai_types.Content(
-            role='user', 
-            parts=[genai_types.Part(text=query)]
-        )
+        # Create a Content object as required by the 'new_message' parameter.
+        user_content_message = genai_types.Content(role='user', parts=[genai_types.Part(text=query)])
         
-        # Call run_async with the fixed user_id and session_id
+        # MODIFIED: Call run_async and process events exactly as shown in the documentation.
         async for event in runner.run_async(
             new_message=user_content_message,
             session_id=SESSION_ID,
             user_id=USER_ID
         ):
-            logging.debug(f"Received event: type={event.type}, data={event.data}")
-            
-            if event.type == "text" and event.data.get("text"):
-                final_response_text += event.data["text"]
-            elif event.type == "error":
-                error_msg = event.data.get("error", "Unknown error occurred")
-                logging.error(f"Agent error event: {error_msg}")
-                raise HTTPException(status_code=500, detail=f"Agent error: {error_msg}")
+            # Check for the final response event
+            if event.is_final_response():
+                if event.content and event.content.parts:
+                    # Extract the text from the first part of the content
+                    final_response_text = event.content.parts[0].text
+                elif event.actions and event.actions.escalate:
+                    final_response_text = f"Agent escalated: {event.error_message or 'No specific message.'}"
+                break # Stop processing after finding the final response
 
-        # Clean up the response
-        final_response_text = final_response_text.strip()
-        
-        logging.info(f"Returning final processed response from Runner for session {SESSION_ID}: {len(final_response_text)} characters")
-        return {"response": final_response_text or "Agent processed the request but returned no text."}
+        logging.info(f"Returning final processed response from Runner for session {SESSION_ID}.")
+        return {"response": final_response_text}
 
-    except HTTPException:
-        # Re-raise HTTP exceptions as-is
-        raise
     except Exception as e:
-        logging.exception("An error occurred while running the agent with the ADK Runner.")
-        raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
+        logging.exception(f"An error occurred while running the agent with the ADK Runner.")
+        raise HTTPException(status_code=500, detail=f"An internal server error occurred: {e}")
 
 # Mount a static directory to serve the HTML file
 if os.path.isdir(STATIC_DIR):
@@ -128,19 +118,8 @@ if os.path.isdir(STATIC_DIR):
 
 @app.get("/")
 async def read_root():
-    """Serve the main UI page."""
     index_html_path = os.path.join(STATIC_DIR, "index.html")
     if os.path.exists(index_html_path):
         return FileResponse(index_html_path)
     else:
         raise HTTPException(status_code=404, detail="index.html not found.")
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint for monitoring."""
-    return {
-        "status": "healthy" if runner else "degraded",
-        "service": "geminiflow-api",
-        "runner_available": runner is not None,
-        "session_id": SESSION_ID if runner else None
-    }
