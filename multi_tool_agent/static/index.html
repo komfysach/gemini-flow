@@ -42,6 +42,16 @@
         margin-right: 20%;
       }
 
+      .status-msg {
+        background: #e3f2fd;
+        border-left: 4px solid #2196f3;
+        padding: 8px 16px;
+        border-radius: 8px;
+        margin-right: 20%;
+        font-size: 0.9em;
+        font-style: italic;
+      }
+
       .error-msg {
         background: #fce8e6;
         border-left: 4px solid #ea4335;
@@ -50,65 +60,137 @@
         margin-right: 20%;
       }
 
-      /* Google-style input focus */
-      .google-input:focus {
-        outline: none;
-        border-color: #4285f4;
-        box-shadow: 0 0 0 2px rgba(66, 133, 244, 0.2);
+      /* Welcome card styles */
+      .command-category {
+        background: #f8f9fa;
+        border: 1px solid #e8eaed;
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 16px;
       }
 
-      /* Google-style button */
-      .google-btn {
-        background: #4285f4;
-        transition: all 0.2s ease-in-out;
-      }
-
-      .google-btn:hover {
-        background: #3367d6;
-        box-shadow: 0 2px 8px rgba(66, 133, 244, 0.3);
-      }
-
-      .google-btn:disabled {
-        background: #dadce0;
+      .command-category h3 {
+        font-size: 14px;
+        font-weight: 500;
         color: #5f6368;
+        margin-bottom: 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
       }
 
-      /* Scrollbar styling */
-      #chat-log::-webkit-scrollbar {
-        width: 6px;
+      .command-example {
+        background: white;
+        border: 1px solid #dadce0;
+        border-radius: 6px;
+        padding: 8px 12px;
+        margin-bottom: 8px;
+        font-size: 13px;
+        color: #3c4043;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        font-family: "Roboto", monospace;
       }
 
-      #chat-log::-webkit-scrollbar-track {
+      .command-example:hover {
         background: #f1f3f4;
-        border-radius: 3px;
+        border-color: #4285f4;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
       }
 
-      #chat-log::-webkit-scrollbar-thumb {
-        background: #dadce0;
-        border-radius: 3px;
+      .command-example:last-child {
+        margin-bottom: 0;
       }
 
-      #chat-log::-webkit-scrollbar-thumb:hover {
-        background: #bdc1c6;
+      /* Streaming toggle styles */
+      .toggle-container {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+
+      .toggle-switch {
+        position: relative;
+        width: 44px;
+        height: 24px;
+        background: #ccc;
+        border-radius: 12px;
+        cursor: pointer;
+        transition: background 0.3s;
+      }
+
+      .toggle-switch.active {
+        background: #4285f4;
+      }
+
+      .toggle-slider {
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 20px;
+        height: 20px;
+        background: white;
+        border-radius: 50%;
+        transition: transform 0.3s;
+      }
+
+      .toggle-switch.active .toggle-slider {
+        transform: translateX(20px);
+      }
+
+      /* Animation for status messages */
+      .status-msg {
+        animation: slideIn 0.3s ease-out;
+      }
+
+      @keyframes slideIn {
+        from {
+          opacity: 0;
+          transform: translateX(-20px);
+        }
+        to {
+          opacity: 1;
+          transform: translateX(0);
+        }
+      }
+
+      /* Pulse animation for processing */
+      .pulse {
+        animation: pulse 2s infinite;
+      }
+
+      @keyframes pulse {
+        0% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.5;
+        }
+        100% {
+          opacity: 1;
+        }
       }
     </style>
   </head>
-  <body class="bg-gray-50 font-google-sans antialiased">
+
+  <body class="bg-gray-50 font-google-sans">
     <div class="min-h-screen flex flex-col">
       <!-- Header -->
-      <header class="bg-white border-b border-gray-200 px-6 py-4">
-        <div class="max-w-4xl mx-auto flex items-center">
-          <div class="flex items-center space-x-3">
-            <!-- Google-style logo placeholder -->
-            <div
-              class="w-8 h-8 bg-gradient-to-br from-blue-500 to-green-500 rounded-full flex items-center justify-center"
-            >
-              <span class="text-white font-bold text-sm">G</span>
-            </div>
-            <h1 class="text-xl font-medium text-gray-900">
-              GeminiFlow DevSecOps Co-Pilot
-            </h1>
+      <header
+        class="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between"
+      >
+        <div class="flex items-center space-x-3">
+          <div
+            class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center"
+          >
+            <span class="text-white font-semibold text-sm">G</span>
           </div>
+          <h1 class="text-xl font-medium text-gray-900">GeminiFlow</h1>
+          <span class="text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded">
+            Co-Pilot
+          </span>
         </div>
       </header>
 
@@ -118,91 +200,157 @@
         <div
           class="bg-white rounded-lg border border-gray-200 shadow-sm p-6 mb-6"
         >
-          <h2 class="text-lg font-medium text-gray-900 mb-2">
+          <h2 class="text-lg font-medium text-gray-900 mb-3">
             Welcome to GeminiFlow
           </h2>
-          <p class="text-gray-600 text-sm leading-relaxed">
-            I can help you with deployments, health checks, and DevSecOps tasks.
-            Try commands like
-            <code class="bg-gray-100 px-2 py-1 rounded text-xs"
-              >"deploy gemini-flow-hello-world from main"</code
-            >
-            ,
-            <code class="bg-gray-100 px-2 py-1 rounded text-xs"
-              >"what are the security vulnerabilities for
-              gemini-flow-hello-world"</code
-            >
-            ,
-            <code class="bg-gray-100 px-2 py-1 rounded text-xs"
-              >"plan a new staging service named staging-test-1 using the latest
-              hello world image"</code
-            >
-            ,
-            <code class="bg-gray-100 px-2 py-1 rounded text-xs"
-              >"what is the health of gemini-flow-hello-world in
-              us-central1"</code
-            >
-            ,
-            <code class="bg-gray-100 px-2 py-1 rounded text-xs"
-              >"how much have we spent in the last 14 days"</code
-            >
-            ,
-            <code class="bg-gray-100 px-2 py-1 rounded text-xs"
-              >"how much have we spent in the last 14 days"</code
-            >
+          <p class="text-gray-600 text-sm leading-relaxed mb-4">
+            Your AI-powered DevSecOps assistant. I can help you deploy
+            applications, check system health, manage infrastructure, analyze
+            costs, and more.
           </p>
+
+          <!-- Command Categories -->
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="command-category">
+              <h3>🚀 Deployment & Security</h3>
+              <div
+                class="command-example"
+                onclick="fillInput(this.textContent)"
+              >
+                deploy gemini-flow-hello-world from main
+              </div>
+              <div
+                class="command-example"
+                onclick="fillInput(this.textContent)"
+              >
+                what are the security vulnerabilities for
+                gemini-flow-hello-world
+              </div>
+            </div>
+
+            <div class="command-category">
+              <h3>🏗️ Infrastructure Management</h3>
+              <div
+                class="command-example"
+                onclick="fillInput(this.textContent)"
+              >
+                plan a new staging service named staging-test-1
+              </div>
+              <div
+                class="command-example"
+                onclick="fillInput(this.textContent)"
+              >
+                apply the plan for staging-test-1
+              </div>
+            </div>
+
+            <div class="command-category">
+              <h3>💰 Cost & Analysis</h3>
+              <div
+                class="command-example"
+                onclick="fillInput(this.textContent)"
+              >
+                what's the cost analysis for my resources
+              </div>
+              <div
+                class="command-example"
+                onclick="fillInput(this.textContent)"
+              >
+                show me billing trends for this month
+              </div>
+            </div>
+
+            <div class="command-category">
+              <h3>🔍 Monitoring & Health</h3>
+              <div
+                class="command-example"
+                onclick="fillInput(this.textContent)"
+              >
+                what's the health status of my services
+              </div>
+              <div
+                class="command-example"
+                onclick="fillInput(this.textContent)"
+              >
+                rollback deployment for gemini-flow-hello-world
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Streaming Toggle -->
+        <div
+          class="bg-white rounded-lg border border-gray-200 shadow-sm p-4 mb-6"
+        >
+          <div class="toggle-container">
+            <div
+              class="toggle-switch active"
+              id="streaming-toggle"
+              onclick="toggleStreaming()"
+            >
+              <div class="toggle-slider"></div>
+            </div>
+            <label
+              class="text-sm text-gray-700 cursor-pointer"
+              onclick="toggleStreaming()"
+            >
+              <span class="font-medium">Live Updates</span> - Get real-time
+              progress for long-running operations
+            </label>
+          </div>
         </div>
 
         <!-- Chat Container -->
-        <div class="bg-white rounded-lg border border-gray-200 shadow-sm">
-          <!-- Chat Messages -->
-          <div id="chat-log" class="h-96 overflow-y-auto p-6 space-y-4">
-            <div class="agent-msg">
-              <div class="font-medium text-green-700 mb-1">GeminiFlow</div>
-              <div class="text-gray-800">
-                Hello! I'm ready to help you with deployments, health checks,
-                and more. What would you like to do?
-              </div>
+        <div
+          class="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden"
+        >
+          <!-- Chat Log -->
+          <div
+            id="chat-log"
+            class="h-96 overflow-y-auto p-6 space-y-4 border-b border-gray-200"
+          >
+            <div class="text-center text-gray-500 text-sm">
+              Start a conversation with GeminiFlow...
             </div>
           </div>
 
           <!-- Input Area -->
-          <div class="border-t border-gray-200 p-4">
-            <div class="flex items-end space-x-3">
-              <div class="flex-1">
-                <input
-                  type="text"
-                  id="user-input"
-                  class="w-full px-4 py-3 border border-gray-300 rounded-lg google-input resize-none"
-                  placeholder="Type your command here..."
-                  autocomplete="off"
-                />
-              </div>
+          <div class="p-4 bg-gray-50">
+            <div class="flex space-x-3">
+              <input
+                type="text"
+                id="user-input"
+                placeholder="Ask me anything about your infrastructure, deployments, security..."
+                class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
               <button
                 id="send-btn"
-                class="google-btn text-white font-medium py-3 px-6 rounded-lg flex items-center space-x-2 disabled:cursor-not-allowed"
+                onclick="sendMessage()"
+                class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
               >
                 <span id="send-text">Send</span>
-                <svg
-                  id="loading-spinner"
-                  class="hidden animate-spin w-4 h-4"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                >
-                  <circle
-                    class="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    stroke-width="4"
-                  ></circle>
-                  <path
-                    class="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                  ></path>
-                </svg>
+                <div id="loading-spinner" class="hidden">
+                  <svg
+                    class="animate-spin h-4 w-4 text-white"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      class="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      stroke-width="4"
+                    ></circle>
+                    <path
+                      class="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    ></path>
+                  </svg>
+                </div>
               </button>
             </div>
           </div>
@@ -210,9 +358,9 @@
       </main>
 
       <!-- Footer -->
-      <footer class="border-t border-gray-200 bg-white px-6 py-4">
+      <footer class="bg-white border-t border-gray-200 px-6 py-4">
         <div class="max-w-4xl mx-auto text-center">
-          <p class="text-xs text-gray-500">
+          <p class="text-sm text-gray-500">
             GeminiFlow - A Google ADK Hackathon Project by
             <a
               href="https://github.com/komfysach"
@@ -230,30 +378,63 @@
       const sendBtn = document.getElementById("send-btn");
       const sendText = document.getElementById("send-text");
       const loadingSpinner = document.getElementById("loading-spinner");
+      const streamingToggle = document.getElementById("streaming-toggle");
 
-      function appendMessage(message, sender) {
+      let isStreamingEnabled = true;
+      let currentStatusMessage = null;
+
+      function appendMessage(message, sender, isStatus = false) {
         const messageDiv = document.createElement("div");
-        const senderClass =
-          sender === "You"
-            ? "user-msg"
-            : sender === "Error"
-            ? "error-msg"
-            : "agent-msg";
-        const senderColor =
-          sender === "You"
-            ? "text-blue-700"
-            : sender === "Error"
-            ? "text-red-700"
-            : "text-green-700";
+        let senderClass, senderColor;
+
+        if (isStatus) {
+          senderClass = "status-msg";
+          senderColor = "text-blue-700";
+        } else {
+          senderClass =
+            sender === "You"
+              ? "user-msg"
+              : sender === "Error"
+              ? "error-msg"
+              : "agent-msg";
+          senderColor =
+            sender === "You"
+              ? "text-blue-700"
+              : sender === "Error"
+              ? "text-red-700"
+              : "text-green-700";
+        }
 
         messageDiv.className = senderClass;
         messageDiv.innerHTML = `
-          <div class="font-medium ${senderColor} mb-1">${sender}</div>
+          <div class="font-medium ${senderColor} mb-1">${
+          isStatus ? "Status" : sender
+        }</div>
           <div class="text-gray-800">${message}</div>
         `;
 
+        // For status messages, replace the current one instead of adding multiple
+        if (isStatus) {
+          if (currentStatusMessage) {
+            currentStatusMessage.remove();
+          }
+          currentStatusMessage = messageDiv;
+        }
+
         chatLog.appendChild(messageDiv);
         chatLog.scrollTop = chatLog.scrollHeight;
+
+        return messageDiv;
+      }
+
+      function fillInput(command) {
+        userInput.value = command;
+        userInput.focus();
+      }
+
+      function toggleStreaming() {
+        isStreamingEnabled = !isStreamingEnabled;
+        streamingToggle.classList.toggle("active", isStreamingEnabled);
       }
 
       async function sendMessage() {
@@ -263,28 +444,108 @@
         appendMessage(escapeHtml(query), "You");
         userInput.value = "";
         setLoading(true);
+        currentStatusMessage = null;
 
         try {
-          const response = await fetch("/invoke", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ query: query }),
-          });
-
-          if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(
-              errorData.detail || `HTTP error! status: ${response.status}`
-            );
+          if (isStreamingEnabled) {
+            await handleStreamingResponse(query);
+          } else {
+            await handleRegularResponse(query);
           }
-
-          const data = await response.json();
-          appendMessage(escapeHtml(data.response), "GeminiFlow");
         } catch (error) {
           console.error("Error:", error);
           appendMessage(escapeHtml(error.message), "Error");
         } finally {
           setLoading(false);
+          currentStatusMessage = null;
+        }
+      }
+
+      async function handleRegularResponse(query) {
+        const response = await fetch("/invoke", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: query }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(
+            errorData.detail || `HTTP error! status: ${response.status}`
+          );
+        }
+
+        const data = await response.json();
+        appendMessage(escapeHtml(data.response), "GeminiFlow");
+      }
+
+      async function handleStreamingResponse(query) {
+        const response = await fetch("/invoke-stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: query }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(
+            errorData.detail || `HTTP error! status: ${response.status}`
+          );
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value);
+            const lines = chunk.split("\n");
+
+            for (const line of lines) {
+              if (line.startsWith("data: ")) {
+                try {
+                  const data = JSON.parse(line.slice(6));
+
+                  switch (data.type) {
+                    case "status":
+                      // Add pulse effect for processing messages
+                      const statusDiv = appendMessage(
+                        escapeHtml(data.data),
+                        "Status",
+                        true
+                      );
+                      if (
+                        data.data.includes("Processing") ||
+                        data.data.includes("Executing")
+                      ) {
+                        statusDiv.classList.add("pulse");
+                      }
+                      break;
+                    case "response":
+                      // Remove status message when final response arrives
+                      if (currentStatusMessage) {
+                        currentStatusMessage.remove();
+                        currentStatusMessage = null;
+                      }
+                      appendMessage(escapeHtml(data.data), "GeminiFlow");
+                      break;
+                    case "error":
+                      appendMessage(escapeHtml(data.data), "Error");
+                      break;
+                    case "done":
+                      return; // Exit the streaming loop
+                  }
+                } catch (e) {
+                  console.error("Error parsing SSE data:", e);
+                }
+              }
+            }
+          }
+        } finally {
+          reader.releaseLock();
         }
       }
 
