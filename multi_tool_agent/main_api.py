@@ -2,9 +2,10 @@
 
 import logging
 import asyncio
+import json
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 import os
 import uuid
@@ -70,6 +71,10 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 class UserQuery(BaseModel):
     query: str
 
+def create_sse_message(message_type: str, data: str) -> str:
+    """Create a Server-Sent Event formatted message."""
+    return f"data: {json.dumps({'type': message_type, 'data': data})}\n\n"
+
 @app.post("/invoke")
 async def invoke_agent(user_query: UserQuery):
     """
@@ -111,6 +116,90 @@ async def invoke_agent(user_query: UserQuery):
     except Exception as e:
         logging.exception(f"An error occurred while running the agent with the ADK Runner.")
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {e}")
+
+@app.post("/invoke-stream")
+async def invoke_agent_stream(user_query: UserQuery):
+    """
+    Streaming endpoint that provides real-time updates during agent processing.
+    Returns Server-Sent Events (SSE) for progressive updates.
+    """
+    query = user_query.query
+    if not runner or not genai_types:
+        raise HTTPException(status_code=500, detail="Agent Runner is not available. Check startup logs.")
+    if not query:
+        raise HTTPException(status_code=400, detail="Query cannot be empty.")
+
+    async def event_generator():
+        try:
+            # Send immediate acknowledgment
+            yield create_sse_message("status", f"🚀 Processing your request: {query}")
+            yield create_sse_message("status", "🔄 Initializing agent...")
+            
+            # Create a Content object as required by the 'new_message' parameter
+            user_content_message = genai_types.Content(role='user', parts=[genai_types.Part(text=query)])
+            
+            # Track progress
+            event_count = 0
+            
+            # Process events from the runner
+            async for event in runner.run_async(
+                new_message=user_content_message,
+                session_id=SESSION_ID,
+                user_id=USER_ID
+            ):
+                event_count += 1
+                
+                # Send progress updates
+                if event_count == 1:
+                    yield create_sse_message("status", "🎯 Agent is analyzing your request...")
+                elif event_count == 2:
+                    yield create_sse_message("status", "⚙️ Selecting appropriate tools...")
+                elif event_count % 5 == 0:  # Every 5th event
+                    yield create_sse_message("status", f"📊 Processing... ({event_count} steps completed)")
+                
+                # Check for tool calls or intermediate responses
+                if hasattr(event, 'tool_calls') and event.tool_calls:
+                    for tool_call in event.tool_calls:
+                        tool_name = getattr(tool_call, 'name', 'unknown tool')
+                        yield create_sse_message("status", f"🔧 Executing {tool_name}...")
+                
+                # Check for final response
+                if event.is_final_response():
+                    final_response_text = "Agent completed processing."
+                    
+                    if event.content and event.content.parts:
+                        final_response_text = event.content.parts[0].text
+                    elif event.actions and event.actions.escalate:
+                        final_response_text = f"Agent escalated: {event.error_message or 'No specific message.'}"
+                    
+                    yield create_sse_message("status", "✅ Processing complete!")
+                    yield create_sse_message("response", final_response_text)
+                    yield create_sse_message("done", "")
+                    break
+                
+                # Small delay to prevent overwhelming the client
+                await asyncio.sleep(0.1)
+            
+            # If we exit the loop without a final response
+            if event_count == 0:
+                yield create_sse_message("status", "❌ No response received from agent")
+                yield create_sse_message("response", "Sorry, I couldn't process your request.")
+                yield create_sse_message("done", "")
+            
+        except Exception as e:
+            logging.exception(f"Error in streaming endpoint: {e}")
+            yield create_sse_message("error", f"An error occurred: {str(e)}")
+            yield create_sse_message("done", "")
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/plain",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Content-Type": "text/event-stream",
+        }
+    )
 
 # Mount a static directory to serve the HTML file
 if os.path.isdir(STATIC_DIR):
