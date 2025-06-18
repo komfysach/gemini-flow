@@ -4,7 +4,6 @@
 import os
 import sys
 import logging
-import json
 from google.adk.agents import LlmAgent, Agent
 from dotenv import load_dotenv
 load_dotenv()
@@ -107,6 +106,7 @@ def plan_new_environment(
     Plans the creation of a new service environment using Terraform.
     If 'image_uri_to_deploy' is 'latest' or not provided, it uses the known latest image for gemini-flow-hello-world.
     """
+    print(f"🎯 Starting Terraform plan for service '{new_service_name}'...")
     logging.info(f"MOA Tool (Infra Plan): Planning new service '{new_service_name}'.")
 
     final_image_uri = ""
@@ -115,11 +115,14 @@ def plan_new_environment(
             f"{TARGET_APP_CLOUD_RUN_REGION}-docker.pkg.dev/{GCP_PROJECT_ID}/"
             f"{INFRA_DEFAULT_IMAGE_REPO}/{INFRA_DEFAULT_IMAGE_NAME}:latest"
         )
+        print(f"📦 Using default image URI: {final_image_uri}")
         logging.info(f"MOA Tool (Infra Plan): Using default image URI: {final_image_uri}")
     else:
         final_image_uri = image_uri_to_deploy
+        print(f"📦 Using specified image URI: {final_image_uri}")
         logging.info(f"MOA Tool (Infra Plan): Using specific image URI provided: {final_image_uri}")
 
+    print("⚙️ Executing Terraform plan operation...")
     plan_report = run_terraform_plan(
         new_service_name=new_service_name,
         deployment_image_uri=final_image_uri,
@@ -127,7 +130,10 @@ def plan_new_environment(
     )
 
     if plan_report.get("status") not in ["SUCCESS", "SUCCESS_NO_LOGS"]:
+        print(f"❌ Terraform plan failed: {plan_report.get('error_message')}")
         return f"Terraform plan FAILED. Reason: {plan_report.get('error_message')}"
+    
+    print("✅ Terraform plan completed successfully!")
     
     # Use the AI summary from the infra agent if available
     ai_summary = plan_report.get("ai_summary", "")
@@ -168,6 +174,8 @@ def apply_new_environment(
     Applies a Terraform plan to create a new service environment.
     This should be called after a plan has been reviewed and approved by the user.
     """
+    print(f"🚀 Starting Terraform apply for service '{new_service_name}'...")
+    print("⚠️  This will create real infrastructure resources. Please wait...")
     logging.info(f"MOA Tool (Infra Apply): Applying plan for new service '{new_service_name}'.")
     
     final_image_uri = ""
@@ -179,6 +187,7 @@ def apply_new_environment(
     else:
         final_image_uri = image_uri_to_deploy
 
+    print("⚙️ Executing Terraform apply operation...")
     apply_report = run_terraform_apply(
         new_service_name=new_service_name,
         deployment_image_uri=final_image_uri,
@@ -186,8 +195,11 @@ def apply_new_environment(
     )
 
     if apply_report.get("status") not in ["SUCCESS", "SUCCESS_NO_LOGS"]:
+        print(f"❌ Terraform apply failed: {apply_report.get('error_message')}")
         return f"❌ Terraform apply FAILED. Reason: {apply_report.get('error_message')}"
 
+    print("✅ Terraform apply completed successfully!")
+    
     # Use the AI summary and parsed message from the infra agent
     ai_summary = apply_report.get("ai_summary", "")
     parsed_message = apply_report.get("message", "")
@@ -229,18 +241,25 @@ def execute_smart_deploy_workflow(
     """
     Orchestrates the full CI/CD/Sec pipeline: SCA -> BTA -> Security -> DA.
     """
+    print(f"🚀 Starting smart deployment workflow for '{target_repository_name}' on branch '{target_branch_name}'...")
+    print("📊 This process includes: Source Control → Build & Test → Security Scan → Deployment → Health Check")
+    
     logging.info(f"MOA Tool (Smart Deploy): Initiating for repo '{target_repository_name}' on branch '{target_branch_name}'.")
     final_summary = []
 
     # Step 1: Source Control
+    print("🔍 Step 1/5: Retrieving latest commit information...")
     logging.info("MOA Tool (Smart Deploy): [Step 1/5] Calling SCA logic...")
     sca_report = get_latest_commit_sha(repo_full_name=TARGET_GITHUB_REPO_FULL_NAME, branch_name=target_branch_name)
     final_summary.append(f"1. SCA Report: {sca_report.get('message', sca_report.get('error_message'))}")
     if sca_report.get("status") != "SUCCESS":
+        print("❌ Source control check failed!")
         return "\n".join(final_summary)
     commit_sha = sca_report.get("commit_sha")
+    print(f"✅ Source control check completed. Latest commit: {commit_sha[:8]}...")
 
     # Step 2: Build & Test
+    print("🔨 Step 2/5: Starting build and test process...")
     logging.info("MOA Tool (Smart Deploy): [Step 2/5] Calling BTA logic...")
     bta_report = trigger_build_and_monitor(
         trigger_id=TARGET_APP_TRIGGER_ID, project_id=GCP_PROJECT_ID,
@@ -250,9 +269,12 @@ def execute_smart_deploy_workflow(
     test_summary = bta_report.get("test_results", {}).get("failure_summary", "Tests not processed.")
     final_summary.append(f"   Test Status: {test_summary}")
     if bta_report.get("status") != "SUCCESS":
+        print("❌ Build and test process failed!")
         return "\n".join(final_summary)
+    print("✅ Build and test completed successfully!")
 
     # MODIFIED: Step 3 - Security Scan
+    print("🔐 Step 3/5: Running security vulnerability scan...")
     logging.info("MOA Tool (Smart Deploy): [Step 3/5] Calling Security Agent logic...")
     image_digest = None
     image_base_name = None
@@ -267,11 +289,13 @@ def execute_smart_deploy_workflow(
 
     if image_base_name and image_digest:
         image_uri_with_digest = f"{image_base_name}@{image_digest}"
+        print(f"🔍 Scanning image: {image_uri_with_digest[:50]}...")
         logging.info(f"MOA Tool (Smart Deploy): Scanning image '{image_uri_with_digest}'...")
         
         scan_results = get_vulnerability_scan_results(image_uri_with_digest=image_uri_with_digest)
         
         if scan_results.get("status") != "SUCCESS":
+            print("❌ Security scan failed!")
             summary = f"Security Scan Report: FAILED to get scan results. Reason: {scan_results.get('error_message')}"
             final_summary.append(f"3. {summary}")
             final_summary.append("Deployment HALTED due to security scan error.")
@@ -281,12 +305,16 @@ def execute_smart_deploy_workflow(
         final_summary.append(f"3. {summary}")
 
         if "CRITICAL" in summary.upper():
+            print("🚨 Critical vulnerabilities found! Deployment halted.")
             final_summary.append("Deployment HALTED due to CRITICAL vulnerabilities found.")
             return "\n".join(final_summary)
+        print("✅ Security scan completed - no critical vulnerabilities found!")
     else:
+        print("⚠️ Security scan skipped - could not determine image URI")
         final_summary.append("3. Security Scan Report: SKIPPED - Could not determine image URI with digest from BTA report.")
 
     # Step 4: Deployment
+    print("🚀 Step 4/5: Deploying to Cloud Run...")
     logging.info("MOA Tool (Smart Deploy): [Step 4/5] Calling DA logic...")
     image_uri_commit = bta_report.get("image_uri_commit")
     da_report = deploy_to_cloud_run(
@@ -295,9 +323,12 @@ def execute_smart_deploy_workflow(
     )
     final_summary.append(f"4. Deployment: {da_report.get('message', da_report.get('error_message'))}")
     if da_report.get("status") != "SUCCESS":
+        print("❌ Deployment failed!")
         return "\n".join(final_summary)
+    print("✅ Deployment completed successfully!")
 
     # MODIFIED: Step 5 - Post-Deployment Health Check & Potential Rollback
+    print("🏥 Step 5/5: Running post-deployment health check...")
     logging.info("MOA Tool (Smart Deploy): [Step 5/5] Performing post-deployment health check...")
     health_check_raw_data = execute_health_check_workflow(
         service_id=TARGET_APP_CLOUD_RUN_SERVICE_NAME,
@@ -308,6 +339,7 @@ def execute_smart_deploy_workflow(
     # Simple check for health issues based on raw data.
     # A more advanced check could use another LLM call to interpret the health data.
     if "Error Count (4xx+5xx): 0" not in health_check_raw_data: # Simple heuristic for errors
+        print("⚠️ Health check detected issues - initiating rollback...")
         final_summary.append("5. Post-Deployment Health Check: FAILED - Errors detected after deployment.")
         logging.warning("Deployment appears unhealthy, initiating automated rollback.")
         
@@ -317,14 +349,19 @@ def execute_smart_deploy_workflow(
         )
         final_summary.append(f"   Rollback Action: {rollback_summary}")
     else:
+        print("✅ Health check passed - deployment is healthy!")
         final_summary.append("5. Post-Deployment Health Check: PASSED - No immediate issues detected.")
         
+    print("🎉 Smart deployment workflow completed!")
     return "\n".join(final_summary)
 
 
 def execute_health_check_workflow(
     service_id: str, location: str, time_window_minutes: int = 15, max_log_entries: int = 5
 ) -> str:
+    print(f"🏥 Starting health check for service '{service_id}' in '{location}'...")
+    print("📊 Gathering metrics and logs...")
+    
     logging.info(f"MOA Tool (Health Check): Initiating for service '{service_id}' in '{location}'.")
     metrics_report = get_cloud_run_metrics(
         project_id=GCP_PROJECT_ID, service_id=service_id, location=location,
@@ -334,17 +371,26 @@ def execute_health_check_workflow(
         project_id=GCP_PROJECT_ID, service_id=service_id, location=location,
         time_window_minutes=time_window_minutes, max_entries=max_log_entries
     )
+    
+    print("📋 Generating health report...")
     raw_data_report_string = generate_health_report(
         service_id=service_id, metrics_report=metrics_report, logs_report=logs_report
     )
+    
+    print("✅ Health check completed!")
     return raw_data_report_string
 
 def execute_finops_report_workflow(
     days_ago: int = 7
 ) -> str:
+    print(f"💰 Starting cost analysis for the last {days_ago} days...")
+    print("📊 Gathering billing data...")
+    
     logging.info(f"MOA Tool (FinOps): Initiating cost report for the last {days_ago} days.")
     total_cost_report = get_total_project_cost(days_ago=days_ago)
     cost_by_service_report = get_cost_by_service(days_ago=days_ago)
+    
+    print("📋 Generating cost report...")
     report_parts = [f"FinOps Report Data (last {days_ago} days):\n"]
     if total_cost_report.get("status") == "SUCCESS":
         report_parts.append(f"Total Cost: {total_cost_report.get('total_cost', 'N/A')}")
@@ -360,11 +406,53 @@ def execute_finops_report_workflow(
             report_parts.append("  - No cost data found for services.")
     else:
         report_parts.append(f"\nTop Services by Cost: Error - {cost_by_service_report.get('error_message')}")
+    
+    print("✅ Cost analysis completed!")
     return "\n".join(report_parts)
+
+def execute_rollback_workflow(
+    service_id: str, location: str
+) -> str:
+    print(f"🔄 Starting rollback process for service '{service_id}' in '{location}'...")
+    print("📋 Finding previous stable revision...")
+    
+    logging.info(f"MOA Tool (Rollback): Initiating for service '{service_id}' in '{location}'.")
+    
+    # Get previous stable revision
+    revision_report = get_previous_stable_revision(
+        project_id=GCP_PROJECT_ID, service_id=service_id, location=location
+    )
+    
+    if revision_report.get("status") != "SUCCESS":
+        error_msg = f"Failed to get previous stable revision: {revision_report.get('error_message')}"
+        print(f"❌ {error_msg}")
+        return error_msg
+    
+    previous_revision = revision_report.get("previous_revision")
+    if not previous_revision:
+        error_msg = "No previous stable revision found for rollback."
+        print(f"❌ {error_msg}")
+        return error_msg
+    
+    print(f"📦 Rolling back to revision: {previous_revision}")
+    
+    # Redirect traffic to previous revision
+    redirect_report = redirect_traffic_to_revision(
+        project_id=GCP_PROJECT_ID, service_id=service_id, location=location, revision_name=previous_revision
+    )
+    
+    if redirect_report.get("status") == "SUCCESS":
+        success_msg = f"Successfully rolled back to revision {previous_revision}"
+        print(f"✅ {success_msg}")
+        return success_msg
+    else:
+        error_msg = f"Rollback failed: {redirect_report.get('error_message')}"
+        print(f"❌ {error_msg}")
+        return error_msg
 
 
 # --- ADK Agent Definition for MOA ---
-agent = LlmAgent(
+root_agent = LlmAgent(
     name="geminiflow_master_orchestrator_agent",
     model="gemini-2.0-flash",
     description=(
