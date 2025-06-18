@@ -35,6 +35,9 @@ APP_NAME = "gemini-flow"
 USER_ID = "webapp_user_01"
 SESSION_ID = "shared_session_01"
 
+# Initialize runner as None - will be set in startup_event
+runner = None
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -43,14 +46,20 @@ async def startup_event():
     single, shared session that all web requests will use.
     """
     global runner
+    
+    logging.info("Starting up GeminiFlow application...")
+    
     if moa_agent and Runner and InMemorySessionService:
-        session_service = InMemorySessionService()
-        runner = Runner(
-            agent=moa_agent,
-            app_name=APP_NAME,
-            session_service=session_service
-        )
         try:
+            logging.info("Initializing ADK components...")
+            session_service = InMemorySessionService()
+            runner = Runner(
+                agent=moa_agent,
+                app_name=APP_NAME,
+                session_service=session_service
+            )
+            logging.info("ADK Runner created successfully")
+            
             # Create the session so it exists before any requests come in.
             await runner.session_service.create_session(
                 app_name=APP_NAME,
@@ -58,11 +67,16 @@ async def startup_event():
                 session_id=SESSION_ID
             )
             logging.info(f"Successfully created shared session: {SESSION_ID}")
+            
         except Exception as e:
-            logging.critical(f"Failed to create persistent session on startup: {e}")
-            runner = None # Disable runner if session creation fails
+            logging.critical(f"Failed to initialize runner or create session: {e}")
+            runner = None # Ensure runner is None if initialization fails
     else:
         logging.critical("Runner could not be initialized due to import errors.")
+        logging.critical(f"moa_agent: {moa_agent is not None}")
+        logging.critical(f"Runner: {Runner is not None}")
+        logging.critical(f"InMemorySessionService: {InMemorySessionService is not None}")
+        runner = None
 
 
 # Construct an absolute path to the 'static' directory
@@ -81,8 +95,12 @@ async def invoke_agent(user_query: UserQuery):
     This endpoint receives a user's query, uses the ADK Runner to process it
     within the pre-existing shared session, and returns the final response.
     """
+    global runner
+    
     query = user_query.query
     if not runner or not genai_types:
+        error_msg = f"Agent Runner is not available. runner={runner is not None}, genai_types={genai_types is not None}"
+        logging.error(error_msg)
         raise HTTPException(status_code=500, detail="Agent Runner is not available. Check startup logs.")
     if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
@@ -123,8 +141,12 @@ async def invoke_agent_stream(user_query: UserQuery):
     Streaming endpoint that provides real-time updates during agent processing.
     Returns Server-Sent Events (SSE) for progressive updates.
     """
+    global runner
+    
     query = user_query.query
     if not runner or not genai_types:
+        error_msg = f"Agent Runner is not available. runner={runner is not None}, genai_types={genai_types is not None}"
+        logging.error(error_msg)
         raise HTTPException(status_code=500, detail="Agent Runner is not available. Check startup logs.")
     if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
