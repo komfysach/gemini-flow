@@ -126,12 +126,37 @@ def plan_new_environment(
         region=region
     )
 
-    if plan_report.get("status") != "SUCCESS":
+    if plan_report.get("status") not in ["SUCCESS", "SUCCESS_NO_LOGS"]:
         return f"Terraform plan FAILED. Reason: {plan_report.get('error_message')}"
     
-    # In a real app, you would parse the log URL to get the plan output and summarize it with Gemini.
-    # For now, we return a simpler message asking for user approval.
-    return f"Terraform plan completed successfully. Please review the plan in the build logs before applying. Log URL: {plan_report.get('log_url')}. Do you want to apply this plan?"
+    # Use the AI summary from the infra agent if available
+    ai_summary = plan_report.get("ai_summary", "")
+    parsed_message = plan_report.get("message", "")
+    log_url = plan_report.get("log_url", "")
+    build_id = plan_report.get("build_id", "")
+    log_retrieved = plan_report.get("log_retrieved", False)
+    
+    response_parts = [
+        f"✅ Terraform plan completed successfully for service '{new_service_name}'.",
+        f"\n📋 Plan Summary: {parsed_message}"
+    ]
+    
+    if ai_summary and ai_summary != "Gemini summarization not available.":
+        response_parts.append(f"\n🤖 AI Analysis: {ai_summary}")
+    
+    if log_retrieved:
+        logs_bucket = plan_report.get("logs_bucket", "")
+        log_path = plan_report.get("log_path", "")
+        response_parts.append(f"\n📁 Logs saved to: gs://{logs_bucket}/{log_path}")
+    
+    response_parts.extend([
+        f"\n🔗 Build Details: {log_url}",
+        f"\n🔧 Build ID: {build_id}",
+        f"\n\n⚠️  Please review the plan details above before proceeding.",
+        f"To apply this plan, respond with: 'apply the plan for {new_service_name}'"
+    ])
+    
+    return "".join(response_parts)
 
 
 def apply_new_environment(
@@ -160,10 +185,41 @@ def apply_new_environment(
         region=region
     )
 
-    if apply_report.get("status") != "SUCCESS":
-        return f"Terraform apply FAILED. Reason: {apply_report.get('error_message')}"
+    if apply_report.get("status") not in ["SUCCESS", "SUCCESS_NO_LOGS"]:
+        return f"❌ Terraform apply FAILED. Reason: {apply_report.get('error_message')}"
 
-    return apply_report.get("message", "Apply completed, but summary is unavailable.")
+    # Use the AI summary and parsed message from the infra agent
+    ai_summary = apply_report.get("ai_summary", "")
+    parsed_message = apply_report.get("message", "")
+    log_url = apply_report.get("log_url", "")
+    build_id = apply_report.get("build_id", "")
+    log_retrieved = apply_report.get("log_retrieved", False)
+    
+    response_parts = [
+        f"🚀 Terraform apply completed successfully for service '{new_service_name}'!",
+        f"\n📋 Apply Summary: {parsed_message}"
+    ]
+    
+    if ai_summary and ai_summary != "Gemini summarization not available.":
+        response_parts.append(f"\n🤖 AI Analysis: {ai_summary}")
+    
+    if log_retrieved:
+        logs_bucket = apply_report.get("logs_bucket", "")
+        log_path = apply_report.get("log_path", "")
+        response_parts.append(f"\n📁 Logs saved to: gs://{logs_bucket}/{log_path}")
+    
+    response_parts.extend([
+        f"\n🔗 Build Details: {log_url}",
+        f"\n🔧 Build ID: {build_id}"
+    ])
+    
+    # Extract service URL from the parsed message if available
+    if "New service URL:" in parsed_message:
+        service_url = parsed_message.split("New service URL: ")[-1].strip()
+        response_parts.append(f"\n🌐 Service URL: {service_url}")
+        response_parts.append(f"\n✅ Your new service '{new_service_name}' is now live and accessible!")
+    
+    return "".join(response_parts)
 
 # --- MOA Tool Definitions ---
 def execute_smart_deploy_workflow(
@@ -322,9 +378,11 @@ agent = LlmAgent(
         "\n3. For INFRASTRUCTURE PROVISIONING: This is a two-step process. "
         "  a. First, when a user asks to 'plan' or 'provision' a new environment (e.g., 'plan a new staging service named staging-v2'), "
         "     identify the new service name and the image to deploy. Then, you MUST use the 'plan_new_environment' tool. "
-        "     Present the plan summary to the user and tell them to give approval to apply it."
+        "     Present the plan summary with AI analysis to the user and tell them to give approval to apply it."
         "  b. Second, when the user gives approval (e.g., 'yes, apply the plan for staging-v2'), "
         "     you MUST use the 'apply_new_environment' tool with the same parameters to create the infrastructure."
+        "\n4. For COST ANALYSIS: When users ask about costs or spending, use 'execute_finops_report_workflow'."
+        "\n5. For ROLLBACKS: When users request a rollback, use 'execute_rollback_workflow'."
     ),
     tools=[
         execute_smart_deploy_workflow,
@@ -364,4 +422,6 @@ if __name__ == "__main__":
         print("   User: deploy gemini-flow-hello-world from main")
         print("   User: what is the health of geminiflow-hello-world-svc in us-central1")
         print("   User: how much have we spent in the last 14 days")
+        print("   User: plan a new staging service named staging-v2")
+        print("   User: apply the plan for staging-v2")
         print("   User: what are the security vulnerabilities in us-central1-docker.pkg.dev/geminiflow-461207/gemini-flow-apps/gemini-flow-hello-world@sha256:...")
