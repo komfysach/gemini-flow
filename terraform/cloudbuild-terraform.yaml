@@ -36,7 +36,6 @@ steps:
     dir: "terraform"
 
 options:
-  logging: GCS_ONLY
-  logsBucket: "gs://geminiflow-461207-tfstate"
+  logging: CLOUD_LOGGING_ONLY
 
 timeout: "1200s"
