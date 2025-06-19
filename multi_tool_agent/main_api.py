@@ -86,17 +86,6 @@ async def stream_agent_response(query: str):
             session_id=session_id,
             user_id=USER_ID
         ):
-            # For this simple streaming UI, we can provide status updates based on tool calls
-            # which are represented by events of type 'function_call' in some ADK versions,
-            # or 'tool_code' in others. Let's check for 'tool_code'.
-            if event.type == "tool_code" and event.data.get("tool_code"):
-                tool_call = event.data["tool_code"]
-                # A simple way to create a status message from the tool call
-                status_message = f"Executing tool: {tool_call.get('name', 'unknown_tool')}..."
-                logging.info(status_message)
-                sse_data = {"type": "status", "data": status_message}
-                yield f"data: {json.dumps(sse_data)}\n\n"
-
             # Check for the final response using the documented method
             if event.is_final_response():
                 final_response_text = "Agent finished." # Default if no text
