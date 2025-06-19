@@ -246,6 +246,7 @@ def execute_smart_deploy_workflow(
     
     logging.info(f"MOA Tool (Smart Deploy): Initiating for repo '{target_repository_name}' on branch '{target_branch_name}'.")
     final_summary = []
+    deployment_url = None  # Initialize deployment URL variable
 
     # Step 1: Source Control
     print("🔍 Step 1/5: Retrieving latest commit information...")
@@ -321,6 +322,13 @@ def execute_smart_deploy_workflow(
         project_id=GCP_PROJECT_ID, region=TARGET_APP_CLOUD_RUN_REGION,
         service_name=TARGET_APP_CLOUD_RUN_SERVICE_NAME, image_uri=image_uri_commit
     )
+    
+    # Capture deployment URL from DA report
+    if da_report.get("status") == "SUCCESS":
+        deployment_url = da_report.get("service_url")
+        if deployment_url:
+            print(f"🌐 Service deployed at: {deployment_url}")
+    
     final_summary.append(f"4. Deployment: {da_report.get('message', da_report.get('error_message'))}")
     if da_report.get("status") != "SUCCESS":
         print("❌ Deployment failed!")
@@ -348,13 +356,21 @@ def execute_smart_deploy_workflow(
             location=TARGET_APP_CLOUD_RUN_REGION
         )
         final_summary.append(f"   Rollback Action: {rollback_summary}")
+        # Clear deployment URL if rollback occurred
+        deployment_url = None
     else:
         print("✅ Health check passed - deployment is healthy!")
         final_summary.append("5. Post-Deployment Health Check: PASSED - No immediate issues detected.")
         
     print("🎉 Smart deployment workflow completed!")
+    
+    # Add deployment URL to final summary if deployment was successful
+    if deployment_url:
+        final_summary.append("")  # Add blank line for better formatting
+        final_summary.append(f"🌐 **DEPLOYMENT URL: {deployment_url}**")
+        final_summary.append("Your application is now live and accessible at the above URL!")
+    
     return "\n".join(final_summary)
-
 
 def execute_health_check_workflow(
     service_id: str, location: str, time_window_minutes: int = 15, max_log_entries: int = 5
