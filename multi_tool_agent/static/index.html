@@ -60,6 +60,71 @@
         margin-right: 20%;
       }
 
+      /* Deployment URL styles */
+      .deployment-url {
+        background: #f0f9ff;
+        border: 2px solid #0ea5e9;
+        border-radius: 12px;
+        padding: 16px;
+        margin: 12px 0;
+        text-align: center;
+      }
+
+      .deployment-url .url-title {
+        font-weight: 600;
+        color: #0c4a6e;
+        font-size: 16px;
+        margin-bottom: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+      }
+
+      .deployment-url .url-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        background: #0ea5e9;
+        color: white;
+        padding: 12px 24px;
+        border-radius: 8px;
+        text-decoration: none;
+        font-weight: 500;
+        transition: all 0.2s ease;
+        font-size: 14px;
+      }
+
+      .deployment-url .url-link:hover {
+        background: #0284c7;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(14, 165, 233, 0.3);
+      }
+
+      /* General clickable link styles */
+      .message-content a {
+        color: #1976d2;
+        text-decoration: none;
+        font-weight: 500;
+        border-bottom: 1px solid #1976d2;
+        transition: all 0.2s ease;
+      }
+
+      .message-content a:hover {
+        color: #1565c0;
+        border-bottom-color: #1565c0;
+        background: rgba(25, 118, 210, 0.1);
+        padding: 2px 4px;
+        border-radius: 4px;
+      }
+
+      /* External link icon */
+      .external-link-icon {
+        width: 12px;
+        height: 12px;
+        opacity: 0.7;
+      }
+
       /* Welcome card styles */
       .command-category {
         background: #f8f9fa;
@@ -170,6 +235,26 @@
         }
         100% {
           opacity: 1;
+        }
+      }
+
+      /* Success highlight animation */
+      .success-highlight {
+        animation: successPulse 1s ease-out;
+      }
+
+      @keyframes successPulse {
+        0% {
+          background: #e8f5e8;
+          transform: scale(1);
+        }
+        50% {
+          background: #c8e6c9;
+          transform: scale(1.02);
+        }
+        100% {
+          background: #e8f5e8;
+          transform: scale(1);
         }
       }
     </style>
@@ -383,6 +468,63 @@
       let isStreamingEnabled = true;
       let currentStatusMessage = null;
 
+      function convertUrlsToLinks(text) {
+        // Regular expression to match URLs
+        const urlRegex = /(https?:\/\/[^\s<>"{}|\\^`[\]]+)/gi;
+
+        // Check if this looks like a deployment URL line
+        const isDeploymentUrl =
+          /🌐.*DEPLOYMENT URL|Your application is now live/i.test(text);
+
+        if (isDeploymentUrl) {
+          // Special handling for deployment URLs
+          const urlMatch = text.match(urlRegex);
+          if (urlMatch && urlMatch[0]) {
+            const url = urlMatch[0];
+            return `
+              <div class="deployment-url">
+                <div class="url-title">
+                  🚀 Deployment Successful!
+                </div>
+                <div style="margin-bottom: 8px; color: #0c4a6e; font-size: 14px;">
+                  Your application is now live and accessible:
+                </div>
+                <a href="${url}" target="_blank" rel="noopener noreferrer" class="url-link">
+                  <span>Open Application</span>
+                  <svg class="external-link-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+                  </svg>
+                </a>
+                <div style="margin-top: 8px; font-size: 12px; color: #64748b;">
+                  ${url}
+                </div>
+              </div>
+            `;
+          }
+        }
+
+        // Regular URL conversion for other text
+        return text.replace(urlRegex, (url) => {
+          return `<a href="${url}" target="_blank" rel="noopener noreferrer">${url} <svg class="external-link-icon inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg></a>`;
+        });
+      }
+
+      function formatMessage(message) {
+        // Convert line breaks to HTML
+        let formattedMessage = message.replace(/\n/g, "<br>");
+
+        // Convert URLs to clickable links
+        formattedMessage = convertUrlsToLinks(formattedMessage);
+
+        // Handle bold text with **
+        formattedMessage = formattedMessage.replace(
+          /\*\*(.*?)\*\*/g,
+          "<strong>$1</strong>"
+        );
+
+        return formattedMessage;
+      }
+
       function appendMessage(message, sender, isStatus = false) {
         const messageDiv = document.createElement("div");
         let senderClass, senderColor;
@@ -406,11 +548,15 @@
         }
 
         messageDiv.className = senderClass;
+
+        const formattedMessage =
+          sender === "You" ? escapeHtml(message) : formatMessage(message);
+
         messageDiv.innerHTML = `
           <div class="font-medium ${senderColor} mb-1">${
           isStatus ? "Status" : sender
         }</div>
-          <div class="text-gray-800">${message}</div>
+          <div class="text-gray-800 message-content">${formattedMessage}</div>
         `;
 
         // For status messages, replace the current one instead of adding multiple
@@ -419,6 +565,14 @@
             currentStatusMessage.remove();
           }
           currentStatusMessage = messageDiv;
+        } else {
+          // Add success highlight for deployment messages
+          if (
+            message.includes("DEPLOYMENT URL") ||
+            message.includes("🚀 Deployment Successful")
+          ) {
+            messageDiv.classList.add("success-highlight");
+          }
         }
 
         chatLog.appendChild(messageDiv);
@@ -441,7 +595,7 @@
         const query = userInput.value.trim();
         if (!query) return;
 
-        appendMessage(escapeHtml(query), "You");
+        appendMessage(query, "You");
         userInput.value = "";
         setLoading(true);
         currentStatusMessage = null;
@@ -454,7 +608,7 @@
           }
         } catch (error) {
           console.error("Error:", error);
-          appendMessage(escapeHtml(error.message), "Error");
+          appendMessage(error.message, "Error");
         } finally {
           setLoading(false);
           currentStatusMessage = null;
@@ -476,7 +630,7 @@
         }
 
         const data = await response.json();
-        appendMessage(escapeHtml(data.response), "GeminiFlow");
+        appendMessage(data.response, "GeminiFlow");
       }
 
       async function handleStreamingResponse(query) {
@@ -513,7 +667,7 @@
                     case "status":
                       // Add pulse effect for processing messages
                       const statusDiv = appendMessage(
-                        escapeHtml(data.data),
+                        data.data,
                         "Status",
                         true
                       );
@@ -530,10 +684,10 @@
                         currentStatusMessage.remove();
                         currentStatusMessage = null;
                       }
-                      appendMessage(escapeHtml(data.data), "GeminiFlow");
+                      appendMessage(data.data, "GeminiFlow");
                       break;
                     case "error":
-                      appendMessage(escapeHtml(data.data), "Error");
+                      appendMessage(data.data, "Error");
                       break;
                     case "done":
                       return; // Exit the streaming loop
