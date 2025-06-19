@@ -86,6 +86,9 @@ async def stream_agent_response(query: str):
             session_id=session_id,
             user_id=USER_ID
         ):
+            # Log the event for debugging
+            if event:
+                logging.info(f"Received event: {event}")
             # Check for the final response using the documented method
             if event.is_final_response():
                 final_response_text = "Agent finished." # Default if no text
