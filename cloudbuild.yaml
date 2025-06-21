@@ -55,6 +55,26 @@ steps:
       ]
     id: "upload-test-results"
 
+  # Step 6: Deploy to existing Cloud Run service
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "gcloud"
+    args:
+      [
+        "run",
+        "deploy",
+        "gemini-flow-service",
+        "--image",
+        "${_AR_HOSTNAME}/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:${COMMIT_SHA}",
+        "--region",
+        "${_REGION}",
+        "--platform",
+        "managed",
+        "--allow-unauthenticated",
+        "--project",
+        "${PROJECT_ID}",
+      ]
+    id: "deploy-cloud-run"
+
 options:
   logging: CLOUD_LOGGING_ONLY
   env:
