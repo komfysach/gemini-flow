@@ -91,6 +91,8 @@ def redirect_traffic_to_revision(
 ) -> dict:
     """
     Updates a Cloud Run service to direct 100% of traffic to a specific revision.
+    This function fetches the current service configuration, updates only the traffic
+    rules, and then applies the update to prevent "required field not present" errors.
 
     Args:
         project_id (str): The Google Cloud Project ID.
@@ -108,22 +110,24 @@ def redirect_traffic_to_revision(
     client = run_v2.ServicesClient()
     service_full_path = f"projects/{project_id}/locations/{location}/services/{service_id}"
     
-    # Define the traffic split to send 100% to the specified revision
-    traffic_target = run_v2.types.TrafficTarget(
-        revision=revision_name,
-        percent=100,
-        type_=run_v2.types.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST # Use LATEST even for specific rev
-    )
-    
-    # Create a service object that only specifies the name and the new traffic configuration.
-    # The client library will use this to patch the existing service.
-    service_update_config = run_v2.types.Service(
-        name=service_full_path,
-        traffic=[traffic_target],
-    )
-    
     try:
-        operation = client.update_service(service=service_update_config)
+        # STEP 1: Get the current, full service configuration. This is the key to the fix.
+        service = client.get_service(name=service_full_path)
+
+        # STEP 2: Define the new traffic split.
+        # Note the correction to TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION
+        traffic_target = run_v2.types.TrafficTarget(
+            revision=revision_name,
+            percent=100,
+            type_=run_v2.types.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION
+        )
+        
+        # STEP 3: Update the traffic attribute on the fetched service object.
+        # We are modifying the object we got from the API, so it has all the required fields.
+        service.traffic = [traffic_target]
+        
+        # STEP 4: Call update_service with the modified, complete service object.
+        operation = client.update_service(service=service)
         logging.info("Rollback Agent: Waiting for traffic update to complete...")
         operation.result(timeout=300) # Wait up to 5 minutes
         
@@ -135,8 +139,7 @@ def redirect_traffic_to_revision(
         error_msg = f"Rollback Agent: Error redirecting traffic: {e}"
         logging.exception(error_msg)
         return {"status": "ERROR", "error_message": error_msg}
-
-
+    
 # --- ADK Agent Definition ---
 rollback_agent = Agent(
     name="geminiflow_rollback_agent",
