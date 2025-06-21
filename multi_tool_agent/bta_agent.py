@@ -271,7 +271,7 @@ def summarize_build_logs_with_gemini(logs: str, build_status: str) -> str:
         
         # Configure Gemini
         genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.0-flash')
         
         prompt = f"""
         Analyze the following Cloud Build logs and provide a concise summary:

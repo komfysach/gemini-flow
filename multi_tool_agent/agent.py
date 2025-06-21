@@ -29,9 +29,9 @@ except ImportError as e:
     sca_agent = Agent(name="dummy_sca_agent", tools=[])
     bta_agent = Agent(name="dummy_bta_agent", tools=[])
     da_agent = Agent(name="dummy_da_agent", tools=[])
-    mda_agent = LlmAgent(name="dummy_mda_agent", model="gemini-1.5-flash-latest", tools=[])
+    mda_agent = LlmAgent(name="dummy_mda_agent", model="gemini-2.0-flash-latest", tools=[])
     finops_agent = Agent(name="dummy_finops_agent", tools=[])
-    secops_agent = LlmAgent(name="dummy_secops_agent", model="gemini-1.5-flash-latest", tools=[])
+    secops_agent = LlmAgent(name="dummy_secops_agent", model="gemini-2.0-flash-latest", tools=[])
     rollback_agent = Agent(name="dummy_rollback_agent", tools=[])
     infra_agent = Agent(name="dummy_infra_agent", tools=[])
     def get_latest_commit_sha(**kwargs): return {"status": "ERROR", "error_message": "SCA module not found."}
