@@ -107,17 +107,20 @@ def redirect_traffic_to_revision(
     if not all([project_id, location, service_id, revision_name]):
         return {"status": "ERROR", "error_message": "Project ID, Location, Service ID, and Revision Name are required."}
 
-    logging.info(f"Rollback Agent: Redirecting 100% of traffic for '{service_id}' to revision '{revision_name.split('/')[-1]}'.")
+    # Extract the short name from the full revision path. This is the key fix.
+    revision_short_name = revision_name.split('/')[-1]
+
+    logging.info(f"Rollback Agent: Redirecting 100% of traffic for '{service_id}' to revision '{revision_short_name}'.")
     client = run_v2.ServicesClient()
     service_full_path = f"projects/{project_id}/locations/{location}/services/{service_id}"
     
     try:
-        # STEP 1: Get the current service configuration. We still need the object to modify.
+        # STEP 1: Get the current service configuration.
         service = client.get_service(name=service_full_path)
 
-        # STEP 2: Define the new traffic split.
+        # STEP 2: Define the new traffic split using the SHORT revision name.
         traffic_target = run_v2.types.TrafficTarget(
-            revision=revision_name,
+            revision=revision_short_name, # Use the short name here
             percent=100,
             type_=run_v2.types.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION
         )
@@ -125,12 +128,10 @@ def redirect_traffic_to_revision(
         # STEP 3: Update the traffic attribute on the fetched service object.
         service.traffic = [traffic_target]
         
-        # STEP 4: Create an update_mask. This is the key fix.
-        # It explicitly tells the API to only update the 'traffic' field,
-        # preventing validation errors on other fields like 'template'.
+        # STEP 4: Create an update_mask to only modify the traffic field.
         update_mask = field_mask_pb2.FieldMask(paths=["traffic"])
         
-        # STEP 5: Call update_service with the modified service object AND the update mask.
+        # STEP 5: Call update_service with the modified service object and the update mask.
         operation = client.update_service(
             service=service,
             update_mask=update_mask
@@ -138,7 +139,7 @@ def redirect_traffic_to_revision(
         logging.info("Rollback Agent: Waiting for traffic update to complete...")
         operation.result(timeout=300) # Wait up to 5 minutes
         
-        message = f"Successfully rolled back service '{service_id}' to direct all traffic to revision '{revision_name.split('/')[-1]}'."
+        message = f"Successfully rolled back service '{service_id}' to direct all traffic to revision '{revision_short_name}'."
         logging.info(f"Rollback Agent: {message}")
         return {"status": "SUCCESS", "message": message}
 
