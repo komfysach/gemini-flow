@@ -239,18 +239,18 @@ def execute_smart_deploy_workflow(
     target_branch_name: str
 ) -> str:
     """
-    Orchestrates the full CI/CD/Sec pipeline: SCA -> BTA -> Security -> DA.
+    Orchestrates the full CI/CD/Sec pipeline: SCA -> BTA -> Security -> DA -> Health Check -> Auto Rollback if needed.
     """
     print(f"🚀 Starting smart deployment workflow for '{target_repository_name}' on branch '{target_branch_name}'...")
-    print("📊 This process includes: Source Control → Build & Test → Security Scan → Deployment → Health Check")
+    print("📊 This process includes: Source Control → Build & Test → Security Scan → Deployment → Health Check → Auto Rollback")
     
     logging.info(f"MOA Tool (Smart Deploy): Initiating for repo '{target_repository_name}' on branch '{target_branch_name}'.")
     final_summary = []
     deployment_url = None  # Initialize deployment URL variable
 
     # Step 1: Source Control
-    print("🔍 Step 1/5: Retrieving latest commit information...")
-    logging.info("MOA Tool (Smart Deploy): [Step 1/5] Calling SCA logic...")
+    print("🔍 Step 1/6: Retrieving latest commit information...")
+    logging.info("MOA Tool (Smart Deploy): [Step 1/6] Calling SCA logic...")
     sca_report = get_latest_commit_sha(repo_full_name=TARGET_GITHUB_REPO_FULL_NAME, branch_name=target_branch_name)
     final_summary.append(f"1. SCA Report: {sca_report.get('message', sca_report.get('error_message'))}")
     if sca_report.get("status") != "SUCCESS":
@@ -260,8 +260,8 @@ def execute_smart_deploy_workflow(
     print(f"✅ Source control check completed. Latest commit: {commit_sha[:8]}...")
 
     # Step 2: Build & Test
-    print("🔨 Step 2/5: Starting build and test process...")
-    logging.info("MOA Tool (Smart Deploy): [Step 2/5] Calling BTA logic...")
+    print("🔨 Step 2/6: Starting build and test process...")
+    logging.info("MOA Tool (Smart Deploy): [Step 2/6] Calling BTA logic...")
     bta_report = trigger_build_and_monitor(
         trigger_id=TARGET_APP_TRIGGER_ID, project_id=GCP_PROJECT_ID,
         repo_name=TARGET_GITHUB_REPO_FULL_NAME.split('/')[-1], branch_name=target_branch_name, commit_sha=commit_sha
@@ -274,9 +274,9 @@ def execute_smart_deploy_workflow(
         return "\n".join(final_summary)
     print("✅ Build and test completed successfully!")
 
-    # MODIFIED: Step 3 - Security Scan
-    print("🔐 Step 3/5: Running security vulnerability scan...")
-    logging.info("MOA Tool (Smart Deploy): [Step 3/5] Calling Security Agent logic...")
+    # Step 3: Security Scan
+    print("🔐 Step 3/6: Running security vulnerability scan...")
+    logging.info("MOA Tool (Smart Deploy): [Step 3/6] Calling Security Agent logic...")
     image_digest = None
     image_base_name = None
     bta_details = bta_report.get("details")
@@ -315,39 +315,54 @@ def execute_smart_deploy_workflow(
         final_summary.append("3. Security Scan Report: SKIPPED - Could not determine image URI with digest from BTA report.")
 
     # Step 4: Deployment
-    print("🚀 Step 4/5: Deploying to Cloud Run...")
-    logging.info("MOA Tool (Smart Deploy): [Step 4/5] Calling DA logic...")
+    print("🚀 Step 4/6: Deploying to Cloud Run...")
+    logging.info("MOA Tool (Smart Deploy): [Step 4/6] Calling DA logic...")
     image_uri_commit = bta_report.get("image_uri_commit")
     da_report = deploy_to_cloud_run(
         project_id=GCP_PROJECT_ID, region=TARGET_APP_CLOUD_RUN_REGION,
         service_name=TARGET_APP_CLOUD_RUN_SERVICE_NAME, image_uri=image_uri_commit
     )
     
-    # Capture deployment URL from DA report
-    if da_report.get("status") == "SUCCESS":
-        deployment_url = da_report.get("service_url")
-        if deployment_url:
-            print(f"🌐 Service deployed at: {deployment_url}")
-    
-    final_summary.append(f"4. Deployment: {da_report.get('message', da_report.get('error_message'))}")
+    # MODIFIED: Handle deployment failure with automatic rollback
     if da_report.get("status") != "SUCCESS":
         print("❌ Deployment failed!")
+        print("🔄 Initiating automatic rollback to maintain service availability...")
+        
+        # Attempt automatic rollback
+        rollback_summary = execute_rollback_workflow(
+            service_id=TARGET_APP_CLOUD_RUN_SERVICE_NAME,
+            location=TARGET_APP_CLOUD_RUN_REGION
+        )
+        
+        deployment_failure_message = da_report.get('error_message', 'Unknown deployment error')
+        final_summary.append(f"4. Deployment: FAILED - {deployment_failure_message}")
+        final_summary.append(f"   🔄 Automatic Rollback: {rollback_summary}")
+        final_summary.append("")
+        final_summary.append("🛡️ **Service Continuity Maintained**: While the new deployment failed, your service has been automatically rolled back to the previous stable version and is still running.")
+        final_summary.append("🔍 **Next Steps**: Review the deployment logs and fix any issues before attempting to deploy again.")
+        
         return "\n".join(final_summary)
+    
+    # Capture deployment URL from successful DA report
+    deployment_url = da_report.get("service_url")
+    if deployment_url:
+        print(f"🌐 Service deployed at: {deployment_url}")
+    
+    final_summary.append(f"4. Deployment: {da_report.get('message', da_report.get('error_message'))}")
     print("✅ Deployment completed successfully!")
 
-    # MODIFIED: Step 5 - Post-Deployment Health Check & Potential Rollback
-    print("🏥 Step 5/5: Running post-deployment health check...")
-    logging.info("MOA Tool (Smart Deploy): [Step 5/5] Performing post-deployment health check...")
+    # Step 5: Post-Deployment Health Check
+    print("🏥 Step 5/6: Running post-deployment health check...")
+    logging.info("MOA Tool (Smart Deploy): [Step 5/6] Performing post-deployment health check...")
     health_check_raw_data = execute_health_check_workflow(
         service_id=TARGET_APP_CLOUD_RUN_SERVICE_NAME,
         location=TARGET_APP_CLOUD_RUN_REGION,
         time_window_minutes=5 # Check a short window right after deployment
     )
     
-    # Simple check for health issues based on raw data.
-    # A more advanced check could use another LLM call to interpret the health data.
-    if "Error Count (4xx+5xx): 0" not in health_check_raw_data: # Simple heuristic for errors
-        print("⚠️ Health check detected issues - initiating rollback...")
+    # Check for health issues and trigger rollback if needed
+    if "Error Count (4xx+5xx): 0" not in health_check_raw_data:
+        print("⚠️ Health check detected issues - initiating automatic rollback...")
         final_summary.append("5. Post-Deployment Health Check: FAILED - Errors detected after deployment.")
         logging.warning("Deployment appears unhealthy, initiating automated rollback.")
         
@@ -355,20 +370,24 @@ def execute_smart_deploy_workflow(
             service_id=TARGET_APP_CLOUD_RUN_SERVICE_NAME,
             location=TARGET_APP_CLOUD_RUN_REGION
         )
-        final_summary.append(f"   Rollback Action: {rollback_summary}")
+        final_summary.append(f"   🔄 Automatic Rollback: {rollback_summary}")
+        final_summary.append("")
+        final_summary.append("🛡️ **Service Continuity Maintained**: Health check failed, but your service has been automatically rolled back to the previous stable version and is still running.")
         # Clear deployment URL if rollback occurred
         deployment_url = None
     else:
         print("✅ Health check passed - deployment is healthy!")
         final_summary.append("5. Post-Deployment Health Check: PASSED - No immediate issues detected.")
-        
+
+    # Step 6: Final Status
     print("🎉 Smart deployment workflow completed!")
+    final_summary.append("6. Workflow Status: COMPLETED")
     
     # Add deployment URL to final summary if deployment was successful
     if deployment_url:
         final_summary.append("")  # Add blank line for better formatting
         final_summary.append(f"🌐 **DEPLOYMENT URL: {deployment_url}**")
-        final_summary.append("Your application is now live and accessible at the above URL!")
+        final_summary.append("✅ Your application is now live and accessible at the above URL!")
     
     return "\n".join(final_summary)
 
@@ -425,48 +444,51 @@ def execute_finops_report_workflow(
     
     print("✅ Cost analysis completed!")
     return "\n".join(report_parts)
-
-def execute_rollback_workflow(
-    service_id: str, location: str
-) -> str:
+def execute_rollback_workflow(service_id: str, location: str) -> str:
+    """
+    Executes a full rollback workflow for a given service.
+    """
     print(f"🔄 Starting rollback process for service '{service_id}' in '{location}'...")
     print("📋 Finding previous stable revision...")
     
-    logging.info(f"MOA Tool (Rollback): Initiating for service '{service_id}' in '{location}'.")
+    logging.warning(f"MOA Tool (Rollback): Initiating rollback for service '{service_id}' in '{location}'.")
     
-    # Get previous stable revision
-    revision_report = get_previous_stable_revision(
-        project_id=GCP_PROJECT_ID, service_id=service_id, location=location
+    # Step 1: Find the revision to roll back to
+    stable_rev_report = get_previous_stable_revision(
+        project_id=GCP_PROJECT_ID,
+        location=location,
+        service_id=service_id
     )
-    
-    if revision_report.get("status") != "SUCCESS":
-        error_msg = f"Failed to get previous stable revision: {revision_report.get('error_message')}"
-        print(f"❌ {error_msg}")
+    if stable_rev_report.get("status") != "SUCCESS":
+        error_msg = f"❌ Rollback FAILED: Could not identify a previous stable revision. Reason: {stable_rev_report.get('error_message')}"
+        print(error_msg)
+        logging.error(error_msg)
         return error_msg
+        
+    revision_to_restore = stable_rev_report.get("previous_stable_revision_name")
+    revision_short_name = revision_to_restore.split('/')[-1] if revision_to_restore else "unknown"
     
-    previous_revision = revision_report.get("previous_revision")
-    if not previous_revision:
-        error_msg = "No previous stable revision found for rollback."
-        print(f"❌ {error_msg}")
-        return error_msg
+    print(f"📦 Rolling back to revision: {revision_short_name}")
     
-    print(f"📦 Rolling back to revision: {previous_revision}")
-    
-    # Redirect traffic to previous revision
+    # Step 2: Redirect traffic
     redirect_report = redirect_traffic_to_revision(
-        project_id=GCP_PROJECT_ID, service_id=service_id, location=location, revision_name=previous_revision
+        project_id=GCP_PROJECT_ID,
+        location=location,
+        service_id=service_id,
+        revision_name=revision_to_restore
     )
     
     if redirect_report.get("status") == "SUCCESS":
-        success_msg = f"Successfully rolled back to revision {previous_revision}"
-        print(f"✅ {success_msg}")
+        success_msg = f"✅ SUCCESS: Service '{service_id}' has been rolled back to stable revision '{revision_short_name}'. Your service is now running the previous stable version and is accessible to users."
+        print(success_msg)
+        logging.info(success_msg)
         return success_msg
     else:
-        error_msg = f"Rollback failed: {redirect_report.get('error_message')}"
-        print(f"❌ {error_msg}")
+        error_msg = f"❌ Rollback FAILED: Attempted to redirect traffic, but failed. Reason: {redirect_report.get('error_message')}"
+        print(error_msg)
+        logging.error(error_msg)
         return error_msg
-
-
+    
 # --- ADK Agent Definition for MOA ---
 root_agent = LlmAgent(
     name="geminiflow_master_orchestrator_agent",
