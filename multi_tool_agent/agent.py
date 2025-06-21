@@ -16,7 +16,7 @@ if SCRIPT_DIR not in sys.path:
 try:
     from sca_agent import sca_agent, get_latest_commit_sha
     from bta_agent import bta_agent, trigger_build_and_monitor
-    from da_agent import da_agent, deploy_to_cloud_run, get_latest_deployed_image
+    from da_agent import da_agent, deploy_to_cloud_run, get_latest_deployed_image, get_service_details
     from mda_agent import mda_agent, get_cloud_run_metrics, get_cloud_run_logs, generate_health_report
     from finops_agent import finops_agent, get_total_project_cost, get_cost_by_service
     from secops_agent import secops_agent, get_vulnerability_scan_results, summarize_vulnerabilities_with_gemini
@@ -49,6 +49,7 @@ except ImportError as e:
     def run_terraform_plan(**kwargs): return {"status": "ERROR", "error_message": "Infra module not found."}
     def run_terraform_apply(**kwargs): return {"status": "ERROR", "error_message": "Infra module not found."}
     def get_latest_deployed_image(**kwargs): return {"status": "ERROR", "error_message": "DA module not found."}
+    def get_service_details(**kwargs): return {"status": "ERROR", "error_message": "DA module not found."}
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -268,13 +269,25 @@ def apply_new_environment(
         f"\n🔗 Build Details: {log_url}",
         f"\n🔧 Build ID: {build_id}"
     ])
+
+    # Step 4: Verify the service URL
+    print(f"🌐 Verifying service URL for '{new_service_name}'...")
+    service_details_report = get_service_details(
+        project_id=GCP_PROJECT_ID,
+        region=region,
+        service_name=new_service_name
+    )
     
-    # Extract service URL from the parsed message if available
-    if "New service URL:" in parsed_message:
-        service_url = parsed_message.split("New service URL: ")[-1].strip()
-        response_parts.append(f"\n🌐 Service URL: {service_url}")
+    # Check if the service details report indicates success
+    if service_details_report.get("status") == "SUCCESS":
+        service_url = service_details_report.get("service_url")
+        response_parts.append(f"\n\n🌐 **Live Service URL: {service_url}**")
         response_parts.append(f"\n✅ Your new service '{new_service_name}' is now live and accessible!")
-    
+    else:
+        # Fallback to log parsing if direct query fails
+        response_parts.append(f"\n\n⚠️ Could not verify the new service URL directly. Please check the Cloud Console or the build logs.")
+        response_parts.append(f"   Error: {service_details_report.get('error_message')}")
+
     return "".join(response_parts)
 
 # --- MOA Tool Definitions ---
