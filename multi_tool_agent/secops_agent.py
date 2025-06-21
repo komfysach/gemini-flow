@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # This SA needs "Artifact Analysis Reader" and "Vertex AI User" roles.
 GCP_PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
 # Vertex AI/Gemini configuration for summarization
-GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.0-flash-latest")
+GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.0-flash")
 VERTEX_AI_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 
 if GCP_PROJECT_ID and VERTEX_AI_LOCATION:

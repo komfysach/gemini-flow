@@ -281,7 +281,7 @@ def generate_health_report(
 # --- ADK Agent Definition for MDA ---
 mda_agent = LlmAgent(
     name="geminiflow_monitoring_diagnostics_agent",
-    model="gemini-2.0-flash-latest", 
+    model="gemini-2.0-flash", 
     description=(
         "The Monitoring & Diagnostics Agent for GeminiFlow. "
         "It fetches metrics and logs for deployed services and can generate health summaries."
