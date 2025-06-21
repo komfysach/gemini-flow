@@ -481,36 +481,36 @@
         // Regular expression to match URLs
         const urlRegex = /(https?:\/\/[^\s<>"{}|\\^`[\]]+)/gi;
 
-        // Check if this looks like a deployment URL line
-        const isDeploymentUrl =
-          /🌐.*DEPLOYMENT URL|Your application is now live/i.test(text);
+        // // Check if this looks like a deployment URL line
+        // const isDeploymentUrl =
+        //   /🌐.*DEPLOYMENT URL|Your application is now live/i.test(text);
 
-        if (isDeploymentUrl) {
-          // Special handling for deployment URLs
-          const urlMatch = text.match(urlRegex);
-          if (urlMatch && urlMatch[0]) {
-            const url = urlMatch[0];
-            return `
-              <div class="deployment-url">
-                <div class="url-title">
-                  🚀 Deployment Successful!
-                </div>
-                <div style="margin-bottom: 8px; color: #0c4a6e; font-size: 14px;">
-                  Your application is now live and accessible:
-                </div>
-                <a href="${url}" target="_blank" rel="noopener noreferrer" class="url-link">
-                  <span>Open Application</span>
-                  <svg class="external-link-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
-                  </svg>
-                </a>
-                <div style="margin-top: 8px; font-size: 12px; color: #64748b;">
-                  ${url}
-                </div>
-              </div>
-            `;
-          }
-        }
+        // if (isDeploymentUrl) {
+        //   // Special handling for deployment URLs
+        //   const urlMatch = text.match(urlRegex);
+        //   if (urlMatch && urlMatch[0]) {
+        //     const url = urlMatch[0];
+        //     return `
+        //       <div class="deployment-url">
+        //         <div class="url-title">
+        //           🚀 Deployment Successful!
+        //         </div>
+        //         <div style="margin-bottom: 8px; color: #0c4a6e; font-size: 14px;">
+        //           Your application is now live and accessible:
+        //         </div>
+        //         <a href="${url}" target="_blank" rel="noopener noreferrer" class="url-link">
+        //           <span>Open Application</span>
+        //           <svg class="external-link-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        //             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+        //           </svg>
+        //         </a>
+        //         <div style="margin-top: 8px; font-size: 12px; color: #64748b;">
+        //           ${url}
+        //         </div>
+        //       </div>
+        //     `;
+        //   }
+        // }
 
         // Regular URL conversion for other text
         return text.replace(urlRegex, (url) => {
