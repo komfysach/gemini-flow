@@ -314,14 +314,28 @@ def extract_test_results(build) -> dict:
     }
     
     try:
-        # Construct the path where test results might be stored in GCS
-        test_results_path = f"builds/{build_id}/test-results.json"
+        commit_sha = None
+        if hasattr(build, 'source') and hasattr(build.source, 'repo_source'):
+            commit_sha = build.source.repo_source.commit_sha
+        elif hasattr(build, 'substitutions') and build.substitutions:
+            # Sometimes commit_sha is in substitutions
+            commit_sha = build.substitutions.get('COMMIT_SHA') or build.substitutions.get('_COMMIT_SHA')
+        
+        if not commit_sha:
+            logging.warning(f"BTA: Could not determine commit SHA for build {build_id}")
+            return default_result
+        
+        test_results_path = f"test-results/{commit_sha}/test_results.json"
         
         # Try to download the test results from GCS
         test_json = _download_gcs_artifact(TEST_RESULTS_BUCKET_NAME, test_results_path)
         if not test_json:
             logging.info(f"BTA: No test results found at gs://{TEST_RESULTS_BUCKET_NAME}/{test_results_path}")
-            return default_result
+            # Try alternative path in case there's a variation
+            alt_test_results_path = f"test-results/{commit_sha}/test_results.json"
+            test_json = _download_gcs_artifact(TEST_RESULTS_BUCKET_NAME, alt_test_results_path)
+            if not test_json:
+                return default_result
         
         # Parse the test results
         results = _parse_go_test_json(test_json)
@@ -330,6 +344,8 @@ def extract_test_results(build) -> dict:
         failure_summary = ""
         if results.get("failures", 0) > 0 and results.get("failure_details"):
             failure_summary = _summarize_test_failures_with_gemini(results["failure_details"])
+        else:
+            failure_summary = "All tests passed successfully."
         
         # Construct the result dictionary
         test_result = {
@@ -350,7 +366,7 @@ def extract_test_results(build) -> dict:
             "test_status": "ERROR",
             "message": f"Error extracting test results: {str(e)}"
         }
-    
+
 # --- ADK Agent Definition for BTA ---
 bta_agent = Agent( 
     name="geminiflow_build_test_agent_enhanced",
