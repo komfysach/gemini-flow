@@ -157,23 +157,37 @@ def get_latest_deployed_image(
     """
     logging.info(f"DA Agent: Getting latest deployed image for service '{service_name}' in '{region}'.")
     try:
-        client = run_v2.ServicesClient()
+        services_client = run_v2.ServicesClient()
+        revisions_client = run_v2.RevisionsClient() # Client for fetching revision details
         service_full_path = f"projects/{project_id}/locations/{region}/services/{service_name}"
         
-        service = client.get_service(name=service_full_path)
+        # Step 1: Get the service object to find its latest revision.
+        service = services_client.get_service(name=service_full_path)
         
-        # The image URI with digest is in the service's template
-        if service.template and service.template.containers:
-            image_uri = service.template.containers[0].image
-            if "@sha256:" in image_uri:
-                logging.info(f"DA Agent: Found latest deployed image: {image_uri}")
+        # Step 2: Get the name of the latest revision that is ready to serve traffic.
+        if not service.latest_ready_revision:
+            return {"status": "FAILURE", "error_message": f"Service '{service_name}' has no ready revisions."}
+        
+        latest_revision_name = service.latest_ready_revision
+        logging.info(f"DA Agent: Found latest ready revision name: {latest_revision_name}")
+
+        # Step 3: Get the full Revision object using its name.
+        revision = revisions_client.get_revision(name=latest_revision_name)
+
+        # Step 4: The image URI with the resolved digest is in the revision's container spec.
+        if revision.containers and revision.containers[0].image:
+            image_uri_with_digest = revision.containers[0].image
+            if "@sha256:" in image_uri_with_digest:
+                logging.info(f"DA Agent: Found latest deployed image with digest: {image_uri_with_digest}")
                 return {
                     "status": "SUCCESS",
-                    "image_uri_with_digest": image_uri,
+                    "image_uri_with_digest": image_uri_with_digest,
                     "message": f"Found latest deployed image for '{service_name}'."
                 }
+            else:
+                return {"status": "FAILURE", "error_message": f"Latest revision's image URI for '{service_name}' does not contain a digest: {image_uri_with_digest}"}
         
-        return {"status": "FAILURE", "error_message": f"Could not find a container image URI for service '{service_name}'."}
+        return {"status": "FAILURE", "error_message": f"Could not find a container image URI in the latest revision for service '{service_name}'."}
 
     except api_exceptions.NotFound:
         error_msg = f"Service '{service_name}' not found in project '{project_id}' and location '{region}'."
