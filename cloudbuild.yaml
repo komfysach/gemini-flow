@@ -62,9 +62,9 @@ steps:
       [
         "run",
         "deploy",
-        "${_SERVICE_NAME}",
+        "${_IMAGE}",
         "--image",
-        "${_AR_HOSTNAME}/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${COMMIT_SHA}",
+        "${_AR_HOSTNAME}/${PROJECT_ID}/${_REPOSITORY}/${_IMAGE}:${COMMIT_SHA}",
         "--region",
         "${_REGION}",
         "--platform",
@@ -83,7 +83,7 @@ options:
 substitutions:
   _AR_HOSTNAME: us-central1-docker.pkg.dev
   _REPOSITORY: gemini-flow-apps
-  _SERVICE_NAME: gemini-flow-service
+  _IMAGE: gemini-flow-service
   _REGION: us-central1
   _TEST_RESULTS_BUCKET: gemini-flow-build-artifacts
 
