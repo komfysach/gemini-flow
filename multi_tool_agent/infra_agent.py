@@ -47,243 +47,59 @@ else:
 
 # --- Infrastructure Agent Tools ---
 
-def _get_build_logs_from_api(build_id: str) -> str | None:
-    """
-    Get build logs directly from Cloud Build API.
-    """
+def _save_log_archive(log_content: str, build_id: str, command: str) -> None:
+    """Saves a copy of the log content to the designated TERRAFORM_LOGS_BUCKET for archival."""
+    if not TERRAFORM_LOGS_BUCKET:
+        logging.warning("Infra Agent: TERRAFORM_LOGS_BUCKET not set. Skipping log archival.")
+        return
     try:
-        logging.info(f"Infra Agent: Fetching logs for build {build_id} using Cloud Build API")
-        client = cloudbuild_v1.CloudBuildClient()
-        
-        # Wait for build to complete and logs to be available
-        max_attempts = 30  # Wait up to 5 minutes
-        for attempt in range(max_attempts):
-            try:
-                build = client.get_build(project_id=GCP_PROJECT_ID, id=build_id)
-                
-                if build.status in [cloudbuild_v1.Build.Status.SUCCESS, 
-                                   cloudbuild_v1.Build.Status.FAILURE, 
-                                   cloudbuild_v1.Build.Status.TIMEOUT,
-                                   cloudbuild_v1.Build.Status.CANCELLED]:
-                    # Build is complete, try to get logs
-                    if hasattr(build, 'log_url') and build.log_url:
-                        # Try to extract logs from GCS if log_url contains GCS path
-                        logs = _extract_logs_from_build_object(build)
-                        if logs:
-                            return logs
-                    
-                    # Fallback: try to get logs from steps
-                    step_logs = _extract_step_logs(build)
-                    if step_logs:
-                        return step_logs
-                        
-                    logging.warning(f"Infra Agent: Build {build_id} completed but no logs found")
-                    break
-                else:
-                    logging.info(f"Infra Agent: Build {build_id} still running (status: {build.status}), attempt {attempt + 1}/{max_attempts}")
-                    time.sleep(10)
-                    
-            except Exception as e:
-                logging.warning(f"Infra Agent: Error getting build {build_id} on attempt {attempt + 1}: {e}")
-                time.sleep(10)
-                
-        return None
-        
+        storage_client = storage.Client(project=GCP_PROJECT_ID)
+        bucket = storage_client.bucket(TERRAFORM_LOGS_BUCKET)
+        object_name = f"terraform-logs/{command}/{build_id}/terraform_log.txt"
+        blob = bucket.blob(object_name)
+        blob.upload_from_string(log_content)
+        logging.info(f"Infra Agent: Saved log archive to gs://{TERRAFORM_LOGS_BUCKET}/{object_name}")
     except Exception as e:
-        logging.error(f"Infra Agent: Failed to get build logs from API: {e}")
-        return None
+        logging.error(f"Infra Agent: Failed to save log archive to TERRAFORM_LOGS_BUCKET: {e}")
 
-def _extract_logs_from_build_object(build) -> str | None:
+def _get_build_logs(build_result) -> str | None:
     """
-    Extract logs from the build object using various methods.
-    """
-    try:
-        # Method 1: Check if logs are stored in GCS bucket
-        if hasattr(build, 'logs_bucket') and build.logs_bucket:
-            logs_bucket = build.logs_bucket
-            build_id = build.id
-            
-            storage_client = storage.Client(project=GCP_PROJECT_ID)
-            
-            # Try different log file patterns
-            log_patterns = [
-                f"log-{build_id}.txt",
-                f"{build_id}.txt",
-                f"logs/{build_id}.txt",
-                f"build-logs/{build_id}.txt"
-            ]
-            
-            for pattern in log_patterns:
-                try:
-                    bucket = storage_client.bucket(logs_bucket)
-                    blob = bucket.blob(pattern)
-                    
-                    if blob.exists():
-                        content = blob.download_as_text()
-                        logging.info(f"Infra Agent: Found logs at gs://{logs_bucket}/{pattern}")
-                        return content
-                        
-                except Exception as e:
-                    logging.debug(f"Infra Agent: Could not access gs://{logs_bucket}/{pattern}: {e}")
-                    continue
-        
-        # Method 2: Try to get logs from Cloud Logging
-        return _get_logs_from_cloud_logging(build.id)
-        
-    except Exception as e:
-        logging.warning(f"Infra Agent: Error extracting logs from build object: {e}")
-        return None
-
-def _get_logs_from_cloud_logging(build_id: str) -> str | None:
-    """
-    Fetch logs from Cloud Logging using the build ID.
-    """
-    try:
-        from google.cloud import logging as cloud_logging
-        
-        logging.info(f"Infra Agent: Attempting to fetch logs from Cloud Logging for build {build_id}")
-        
-        client = cloud_logging.Client(project=GCP_PROJECT_ID)
-        
-        # Query for Cloud Build logs
-        filter_str = f'''
-        resource.type="build"
-        resource.labels.build_id="{build_id}"
-        logName="projects/{GCP_PROJECT_ID}/logs/cloudbuild"
-        '''
-        
-        entries = list(client.list_entries(filter_=filter_str, order_by=cloud_logging.ASCENDING))
-        
-        if entries:
-            log_lines = []
-            for entry in entries:
-                if hasattr(entry, 'payload') and entry.payload:
-                    log_lines.append(str(entry.payload))
-                elif hasattr(entry, 'text_payload') and entry.text_payload:
-                    log_lines.append(entry.text_payload)
-                    
-            if log_lines:
-                full_log = '\n'.join(log_lines)
-                logging.info(f"Infra Agent: Retrieved {len(log_lines)} log entries from Cloud Logging")
-                return full_log
-        
-        logging.warning(f"Infra Agent: No logs found in Cloud Logging for build {build_id}")
-        return None
-        
-    except Exception as e:
-        logging.warning(f"Infra Agent: Could not fetch logs from Cloud Logging: {e}")
-        return None
-
-def _extract_step_logs(build) -> str | None:
-    """
-    Extract logs from individual build steps if available.
-    """
-    try:
-        if hasattr(build, 'steps') and build.steps:
-            step_logs = []
-            for i, step in enumerate(build.steps):
-                step_log = f"--- Step {i}: {getattr(step, 'name', 'unknown')} ---\n"
-                
-                # Add any step-specific information
-                if hasattr(step, 'args') and step.args:
-                    step_log += f"Args: {' '.join(step.args)}\n"
-                    
-                step_logs.append(step_log)
-            
-            if step_logs:
-                return '\n'.join(step_logs)
-                
-    except Exception as e:
-        logging.warning(f"Infra Agent: Error extracting step logs: {e}")
-        
-    return None
-
-def _copy_logs_to_terraform_bucket(build_result, command: str) -> str | None:
-    """
-    Copies build logs from Cloud Build to TERRAFORM_LOGS_BUCKET and returns the content.
-    This ensures we always have access to logs in our designated bucket.
+    Directly retrieves logs from the build's GCS bucket.
+    Includes a retry mechanism to wait for the log file to become available.
     """
     build_id = build_result.id
-    
-    logging.info(f"Infra Agent: Copying logs for build {build_id} to TERRAFORM_LOGS_BUCKET")
-    
-    # Get the actual build logs (not the web console HTML)
-    log_content = _get_build_logs_from_api(build_id)
-    
-    if log_content:
-        # Save to our designated bucket
-        if _save_log_to_terraform_bucket(log_content, build_id, command):
-            logging.info(f"Infra Agent: Successfully copied logs to TERRAFORM_LOGS_BUCKET")
-            return log_content
-        else:
-            logging.warning(f"Infra Agent: Retrieved logs but failed to save to TERRAFORM_LOGS_BUCKET")
-            return log_content  # Still return the content even if save failed
-    
-    logging.error(f"Infra Agent: Could not retrieve logs for build {build_id}")
-    return None
+    # The build result contains the path to the bucket where logs are stored.
+    logs_bucket_path = build_result.logs_bucket
 
-def _save_log_to_terraform_bucket(log_content: str, build_id: str, command: str) -> bool:
-    """
-    Saves log content to TERRAFORM_LOGS_BUCKET.
-    """
-    try:
-        storage_client = storage.Client(project=GCP_PROJECT_ID)
-        bucket = storage_client.bucket(TERRAFORM_LOGS_BUCKET)
-        
-        object_name = f"terraform-logs/{command}/{build_id}/terraform_log.txt"
-        blob = bucket.blob(object_name)
-        
-        blob.upload_from_string(log_content)
-        logging.info(f"Infra Agent: Saved log to gs://{TERRAFORM_LOGS_BUCKET}/{object_name}")
-        return True
-        
-    except Exception as e:
-        logging.error(f"Infra Agent: Failed to save log to TERRAFORM_LOGS_BUCKET: {e}")
-        return False
-
-def _get_logs_from_terraform_bucket(build_id: str, command: str) -> str | None:
-    """
-    Retrieves logs from TERRAFORM_LOGS_BUCKET.
-    """
-    try:
-        storage_client = storage.Client(project=GCP_PROJECT_ID)
-        bucket = storage_client.bucket(TERRAFORM_LOGS_BUCKET)
-        
-        object_name = f"terraform-logs/{command}/{build_id}/terraform_log.txt"
-        blob = bucket.blob(object_name)
-        
-        if blob.exists():
-            content = blob.download_as_text()
-            logging.info(f"Infra Agent: Retrieved logs from gs://{TERRAFORM_LOGS_BUCKET}/{object_name}")
-            return content
-        else:
-            logging.warning(f"Infra Agent: No logs found at gs://{TERRAFORM_LOGS_BUCKET}/{object_name}")
-            return None
-            
-    except Exception as e:
-        logging.error(f"Infra Agent: Error retrieving logs from TERRAFORM_LOGS_BUCKET: {e}")
+    if not logs_bucket_path or not logs_bucket_path.startswith('gs://'):
+        logging.error(f"Infra Agent: Build {build_id} did not provide a valid GCS logs_bucket path.")
         return None
 
-def _download_gcs_artifact(bucket_name: str, object_name: str) -> str | None:
-    """Downloads a file from GCS."""
     try:
+        # Extract bucket name from 'gs://<bucket_name>/...'
+        bucket_name = logs_bucket_path.split('gs://')[1].split('/')[0]
+        # The log file is consistently named log-{build_id}.txt at the root of the log path.
+        log_file_name = f"log-{build_id}.txt"
+        
         storage_client = storage.Client(project=GCP_PROJECT_ID)
-        bucket = storage_client.bucket(bucket_name)
-        blob = bucket.blob(object_name)
-        
-        logging.info(f"Infra Agent: Checking for artifact in GCS: bucket={bucket_name}, object={object_name}")
-        
-        if not blob.exists():
-            logging.warning(f"Infra Agent: Artifact not found in GCS: gs://{bucket_name}/{object_name}")
-            return None
-            
-        logging.info(f"Infra Agent: Downloading artifact gs://{bucket_name}/{object_name}")
-        return blob.download_as_text()
-        
-    except Exception as e:
-        logging.error(f"Infra Agent: Failed to download GCS artifact gs://{bucket_name}/{object_name}: {e}")
-        return None
+        source_bucket = storage_client.bucket(bucket_name)
+        source_blob = source_bucket.blob(log_file_name)
 
+        log_content = None
+        # Retry logic: It can take a few moments for the log file to appear after the build completes.
+        for attempt in range(6): # Try for up to 60 seconds
+            if source_blob.exists():
+                logging.info(f"Infra Agent: Found log file at gs://{bucket_name}/{log_file_name}.")
+                log_content = source_blob.download_as_text()
+                break
+            logging.info(f"Infra Agent: Log not yet available at gs://{bucket_name}/{log_file_name}. Waiting 10s... (Attempt {attempt+1}/6)")
+            time.sleep(10)
+        
+        return log_content
+
+    except Exception as e:
+        logging.error(f"Infra Agent: An error occurred while retrieving logs for build {build_id}: {e}")
+        return None
 def _parse_terraform_log(log_text: str, command: str) -> str:
     """Parses Terraform logs to find the plan summary or apply output."""
     if not log_text:
@@ -357,7 +173,6 @@ Terraform {command} output:
 def _run_terraform_trigger(command: str, new_service_name: str, deployment_image_uri: str, region: str) -> dict:
     """Helper function to run the Terraform trigger and process results."""
     logging.info(f"Infra Agent: Invoking Terraform trigger for command '{command}' on service '{new_service_name}'.")
-    logging.info(f"Infra Agent: Using TERRAFORM_LOGS_BUCKET: {TERRAFORM_LOGS_BUCKET}")
     
     client = cloudbuild_v1.CloudBuildClient()
 
@@ -383,12 +198,15 @@ def _run_terraform_trigger(command: str, new_service_name: str, deployment_image
         log_url = result.log_url
         logging.info(f"Infra Agent: Terraform trigger run completed. Status: {result.status}. Logs at: {log_url}")
 
+        # Get logs using the new simplified and robust function
+        log_text = _get_build_logs(result)
+
         if result.status == cloudbuild_v1.Build.Status.SUCCESS:
-            # Step 1: Copy logs to TERRAFORM_LOGS_BUCKET
-            log_text = _copy_logs_to_terraform_bucket(result, command)
-            
             if log_text:
-                # Step 2: Parse and analyze logs
+                # Save a copy for our records
+                _save_log_archive(log_text, build_id, command)
+                
+                # Parse and analyze logs
                 parsed_message = _parse_terraform_log(log_text, command)
                 ai_summary = _summarize_terraform_output_with_gemini(log_text, command)
                 
@@ -403,35 +221,37 @@ def _run_terraform_trigger(command: str, new_service_name: str, deployment_image
                     "log_path": f"terraform-logs/{command}/{build_id}/terraform_log.txt"
                 }
             else:
+                # Build succeeded but we couldn't get the logs
                 return {
                     "status": "SUCCESS_NO_LOGS", 
-                    "message": f"Terraform {command} completed successfully, but logs could not be copied to {TERRAFORM_LOGS_BUCKET}.",
+                    "message": f"Terraform {command} completed successfully, but logs could not be retrieved from the build's log bucket.",
                     "ai_summary": "Logs not available for AI analysis.",
                     "log_url": log_url,
                     "build_id": build_id,
                     "log_retrieved": False,
-                    "logs_bucket": TERRAFORM_LOGS_BUCKET,
                     "note": "Check the log_url manually for detailed output."
                 }
-        else:
-            # Even for failures, try to get logs for debugging
-            log_text = _copy_logs_to_terraform_bucket(result, command)
-            
+        else: # Build failed
+            error_message = f"Terraform {command} build failed. Check logs for details: {log_url}"
+            if log_text:
+                # If we got logs for the failure, add a summary
+                _save_log_archive(log_text, build_id, command)
+                ai_summary = _summarize_terraform_output_with_gemini(log_text, command)
+                error_message += f"\n\nAI Analysis of Failure:\n{ai_summary}"
+
             return {
                 "status": "FAILURE", 
-                "error_message": f"Terraform {command} build failed. Check logs for details: {log_url}",
+                "error_message": error_message,
                 "build_id": build_id,
                 "log_url": log_url,
-                "logs_bucket": TERRAFORM_LOGS_BUCKET,
                 "log_retrieved": log_text is not None,
-                "log_path": f"terraform-logs/{command}/{build_id}/terraform_log.txt" if log_text else None
             }
 
     except Exception as e:
         error_msg = f"Infra Agent: Failed to run Terraform trigger: {e}"
         logging.exception(error_msg)
         return {"status": "ERROR", "error_message": error_msg}
-
+    
 def run_terraform_plan(
     new_service_name: str,
     deployment_image_uri: str,
