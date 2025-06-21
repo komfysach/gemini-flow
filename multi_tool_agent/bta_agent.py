@@ -192,7 +192,7 @@ def trigger_build_and_monitor(
                 }
             
             # Extract test results if available
-            test_results = extract_test_results(build)
+            test_results = extract_test_results(build, commit_sha)
             
             success_message = f"Build completed successfully for {repo_name}:{branch_name}"
             if log_summary:
@@ -297,12 +297,16 @@ def summarize_build_logs_with_gemini(logs: str, build_status: str) -> str:
         logging.warning(f"Could not summarize logs with Gemini: {e}")
         return f"Build completed with status: {build_status}. Manual log review may be needed."
 
-def extract_test_results(build) -> dict:
+def extract_test_results(build, commit_sha: str = None) -> dict:
     """
     Extract test results from a completed build.
     
     This function checks if the build has associated test results in the 
     Google Cloud Storage bucket and parses them accordingly.
+    
+    Args:
+        build: The Cloud Build object
+        commit_sha: The commit SHA (passed from trigger_build_and_monitor)
     """
     build_id = build.id
     logging.info(f"BTA: Extracting test results for build {build_id}")
@@ -314,26 +318,67 @@ def extract_test_results(build) -> dict:
     }
     
     try:
-        commit_sha = None
-        if hasattr(build, 'source') and hasattr(build.source, 'repo_source'):
-            commit_sha = build.source.repo_source.commit_sha
-        elif hasattr(build, 'substitutions') and build.substitutions:
-            # Sometimes commit_sha is in substitutions
-            commit_sha = build.substitutions.get('COMMIT_SHA') or build.substitutions.get('_COMMIT_SHA')
-        
-        if not commit_sha:
-            logging.warning(f"BTA: Could not determine commit SHA for build {build_id}")
-            return default_result
-        
-        test_results_path = f"test-results/{commit_sha}/test_results.json"
-        
-        # Try to download the test results from GCS
-        test_json = _download_gcs_artifact(TEST_RESULTS_BUCKET_NAME, test_results_path)
-        if not test_json:
-            logging.info(f"BTA: No test results found at gs://{TEST_RESULTS_BUCKET_NAME}/{test_results_path}")
-            # Try alternative path in case there's a variation
-            alt_test_results_path = f"test-results/{commit_sha}/test_results.json"
-            test_json = _download_gcs_artifact(TEST_RESULTS_BUCKET_NAME, alt_test_results_path)
+        # If commit_sha is provided, use it directly (much simpler!)
+        if commit_sha:
+            logging.info(f"BTA: Using provided commit SHA: {commit_sha}")
+            test_results_path = f"test-results/{commit_sha}/test_results.json"
+            
+            # Try to download the test results from GCS
+            test_json = _download_gcs_artifact(TEST_RESULTS_BUCKET_NAME, test_results_path)
+            
+            if not test_json:
+                logging.info(f"BTA: No test results found at gs://{TEST_RESULTS_BUCKET_NAME}/{test_results_path}")
+                # Try alternative paths with the provided commit_sha
+                alternative_paths = [
+                    f"test-results/{commit_sha[:8]}/test_results.json",  # Short SHA
+                    f"builds/{build_id}/test-results.json",             # Build ID path
+                    f"test-results/{build_id}/test_results.json",       # Alternative build ID path
+                ]
+                
+                for alt_path in alternative_paths:
+                    test_json = _download_gcs_artifact(TEST_RESULTS_BUCKET_NAME, alt_path)
+                    if test_json:
+                        logging.info(f"BTA: Found test results at alternative path: gs://{TEST_RESULTS_BUCKET_NAME}/{alt_path}")
+                        break
+                
+                if not test_json:
+                    return default_result
+        else:
+            # Fallback: try to get commit_sha from build object (keep this as backup)
+            logging.warning(f"BTA: No commit SHA provided, trying to extract from build object")
+            
+            # Try multiple ways to get the commit SHA from build object
+            extracted_commit_sha = None
+            if hasattr(build, 'source') and build.source and hasattr(build.source, 'repo_source') and build.source.repo_source:
+                extracted_commit_sha = build.source.repo_source.commit_sha
+                logging.info(f"BTA: Found commit SHA from source.repo_source: {extracted_commit_sha}")
+            
+            if not extracted_commit_sha and hasattr(build, 'substitutions') and build.substitutions:
+                extracted_commit_sha = (build.substitutions.get('COMMIT_SHA') or 
+                                      build.substitutions.get('_COMMIT_SHA') or 
+                                      build.substitutions.get('SHORT_SHA') or
+                                      build.substitutions.get('_SHORT_SHA'))
+                if extracted_commit_sha:
+                    logging.info(f"BTA: Found commit SHA from substitutions: {extracted_commit_sha}")
+            
+            if extracted_commit_sha:
+                test_results_path = f"test-results/{extracted_commit_sha}/test_results.json"
+                test_json = _download_gcs_artifact(TEST_RESULTS_BUCKET_NAME, test_results_path)
+            else:
+                # Last resort: try build_id paths
+                logging.warning(f"BTA: Could not determine commit SHA, trying build_id as fallback")
+                possible_paths = [
+                    f"test-results/{build_id}/test_results.json",
+                    f"builds/{build_id}/test-results.json",
+                ]
+                
+                test_json = None
+                for test_results_path in possible_paths:
+                    test_json = _download_gcs_artifact(TEST_RESULTS_BUCKET_NAME, test_results_path)
+                    if test_json:
+                        logging.info(f"BTA: Found test results at gs://{TEST_RESULTS_BUCKET_NAME}/{test_results_path}")
+                        break
+            
             if not test_json:
                 return default_result
         
@@ -366,7 +411,7 @@ def extract_test_results(build) -> dict:
             "test_status": "ERROR",
             "message": f"Error extracting test results: {str(e)}"
         }
-
+    
 # --- ADK Agent Definition for BTA ---
 bta_agent = Agent( 
     name="geminiflow_build_test_agent_enhanced",
