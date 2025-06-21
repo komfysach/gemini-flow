@@ -146,6 +146,44 @@ def deploy_to_cloud_run(
         logging.exception(error_msg)
         return { "status": "FAILURE", "service_name": service_name, "error_message": error_msg }
 
+
+def get_latest_deployed_image(
+    project_id: str,
+    region: str,
+    service_name: str
+) -> dict:
+    """
+    Retrieves the full image URI (with digest) of the latest revision serving traffic for a Cloud Run service.
+    """
+    logging.info(f"DA Agent: Getting latest deployed image for service '{service_name}' in '{region}'.")
+    try:
+        client = run_v2.ServicesClient()
+        service_full_path = f"projects/{project_id}/locations/{region}/services/{service_name}"
+        
+        service = client.get_service(name=service_full_path)
+        
+        # The image URI with digest is in the service's template
+        if service.template and service.template.containers:
+            image_uri = service.template.containers[0].image
+            if "@sha256:" in image_uri:
+                logging.info(f"DA Agent: Found latest deployed image: {image_uri}")
+                return {
+                    "status": "SUCCESS",
+                    "image_uri_with_digest": image_uri,
+                    "message": f"Found latest deployed image for '{service_name}'."
+                }
+        
+        return {"status": "FAILURE", "error_message": f"Could not find a container image URI for service '{service_name}'."}
+
+    except api_exceptions.NotFound:
+        error_msg = f"Service '{service_name}' not found in project '{project_id}' and location '{region}'."
+        logging.error(f"DA Agent: {error_msg}")
+        return {"status": "ERROR", "error_message": error_msg}
+    except Exception as e:
+        error_msg = f"An unexpected error occurred while getting the latest image for '{service_name}': {str(e)}"
+        logging.exception(error_msg)
+        return {"status": "FAILURE", "error_message": error_msg}
+    
 # --- ADK Agent Definition ---
 da_agent = Agent(
     name="geminiflow_deployment_agent",
@@ -154,7 +192,7 @@ da_agent = Agent(
         "You are a Deployment Agent. You receive requests to deploy specified container images "
         "to target environments (like Cloud Run) and report back the deployment status and service URL."
     ),
-    tools=[deploy_to_cloud_run],
+    tools=[deploy_to_cloud_run, get_latest_deployed_image],
 )
 
 # --- Local Testing Example ---

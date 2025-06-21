@@ -16,7 +16,7 @@ if SCRIPT_DIR not in sys.path:
 try:
     from sca_agent import sca_agent, get_latest_commit_sha
     from bta_agent import bta_agent, trigger_build_and_monitor
-    from da_agent import da_agent, deploy_to_cloud_run
+    from da_agent import da_agent, deploy_to_cloud_run, get_latest_deployed_image
     from mda_agent import mda_agent, get_cloud_run_metrics, get_cloud_run_logs, generate_health_report
     from finops_agent import finops_agent, get_total_project_cost, get_cost_by_service
     from secops_agent import secops_agent, get_vulnerability_scan_results, summarize_vulnerabilities_with_gemini
@@ -48,6 +48,7 @@ except ImportError as e:
     def redirect_traffic_to_revision(**kwargs): return {"status": "ERROR", "error_message": "Rollback module not found."}
     def run_terraform_plan(**kwargs): return {"status": "ERROR", "error_message": "Infra module not found."}
     def run_terraform_apply(**kwargs): return {"status": "ERROR", "error_message": "Infra module not found."}
+    def get_latest_deployed_image(**kwargs): return {"status": "ERROR", "error_message": "DA module not found."}
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -163,6 +164,49 @@ def plan_new_environment(
     ])
     
     return "".join(response_parts)
+
+def execute_security_scan_for_latest_deployment(
+    service_name: str = TARGET_APP_CLOUD_RUN_SERVICE_NAME,
+    region: str = TARGET_APP_CLOUD_RUN_REGION
+) -> str:
+    """
+    Finds the latest deployed image for a service and runs a security scan on it.
+    This is used when the user asks for vulnerabilities of the 'latest deployment'.
+    """
+    print(f"🛡️  Starting security scan for the latest deployment of '{service_name}'...")
+    logging.info(f"MOA Tool (Latest Security Scan): Initiating for service '{service_name}'.")
+
+    # Step 1: Get the latest deployed image URI
+    print(f"🔍 Finding the latest deployed image for '{service_name}'...")
+    image_report = get_latest_deployed_image(
+        project_id=GCP_PROJECT_ID,
+        region=region,
+        service_name=service_name
+    )
+
+    if image_report.get("status") != "SUCCESS":
+        error_msg = f"❌ Could not find the latest deployed image. Reason: {image_report.get('error_message')}"
+        print(error_msg)
+        return error_msg
+
+    image_uri_with_digest = image_report.get("image_uri_with_digest")
+    print(f"✅ Found image: {image_uri_with_digest}")
+
+    # Step 2: Run the vulnerability scan using the found image URI
+    print(f"🔐 Running vulnerability scan on '{image_uri_with_digest[:50]}...'")
+    scan_results = get_vulnerability_scan_results(image_uri_with_digest=image_uri_with_digest)
+
+    if scan_results.get("status") != "SUCCESS":
+        error_msg = f"❌ Vulnerability scan failed. Reason: {scan_results.get('error_message')}"
+        print(error_msg)
+        return error_msg
+
+    # Step 3: Summarize the results with Gemini
+    print("🤖 Generating summary of scan results...")
+    summary = summarize_vulnerabilities_with_gemini(scan_results=scan_results)
+    
+    print("✅ Security scan and summarization complete!")
+    return summary
 
 
 def apply_new_environment(
@@ -509,6 +553,7 @@ root_agent = LlmAgent(
         "     you MUST use the 'apply_new_environment' tool with the same parameters to create the infrastructure."
         "\n4. For COST ANALYSIS: When users ask about costs or spending, use 'execute_finops_report_workflow'."
         "\n5. For ROLLBACKS: When users request a rollback, use 'execute_rollback_workflow'."
+        "\n6. For SECURITY SCANS: When a user asks for vulnerabilities of the 'latest deployment' or a specific service, you MUST use the 'execute_security_scan_for_latest_deployment' tool. If they provide a specific image URI with a digest, you can use the 'summarize_vulnerabilities_with_gemini' and 'get_vulnerability_scan_results' tools directly."
     ),
     tools=[
         execute_smart_deploy_workflow,
@@ -516,7 +561,8 @@ root_agent = LlmAgent(
         execute_finops_report_workflow,
         execute_rollback_workflow,
         plan_new_environment,
-        apply_new_environment
+        apply_new_environment,
+        execute_security_scan_for_latest_deployment
     ],
     sub_agents=[sca_agent, bta_agent, da_agent, mda_agent, finops_agent, secops_agent, rollback_agent, infra_agent]
 )
