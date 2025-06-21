@@ -198,6 +198,49 @@ def get_latest_deployed_image(
         logging.exception(error_msg)
         return {"status": "FAILURE", "error_message": error_msg}
     
+def get_service_details(
+    project_id: str,
+    region: str,
+    service_name: str
+) -> dict:
+    """
+    Retrieves details for a specific Cloud Run service, including its URL.
+    """
+    logging.info(f"DA Agent: Getting details for service '{service_name}' in '{region}'.")
+    try:
+        client = run_v2.ServicesClient()
+        service_full_path = f"projects/{project_id}/locations/{region}/services/{service_name}"
+        
+        service = client.get_service(name=service_full_path)
+        
+        return {
+            "status": "SUCCESS",
+            "service_name": service.name.split('/')[-1],
+            "service_url": service.uri,
+            "message": f"Successfully retrieved details for service '{service_name}'."
+        }
+
+    except api_exceptions.NotFound:
+        error_msg = f"Service '{service_name}' not found in project '{project_id}' and location '{region}'."
+        logging.error(f"DA Agent: {error_msg}")
+        return {"status": "ERROR", "error_message": error_msg}
+    except Exception as e:
+        error_msg = f"An unexpected error occurred while getting details for '{service_name}': {str(e)}"
+        logging.exception(error_msg)
+        return {"status": "FAILURE", "error_message": error_msg}
+    
+# --- ADK Agent Definition ---
+da_agent = Agent(
+    name="geminiflow_deployment_agent",
+    description="An agent responsible for deploying containerized applications to runtime environments like Cloud Run and retrieving information about current deployments.",
+    instruction=(
+        "You are a Deployment Agent. You receive requests to deploy specified container images "
+        "to target environments (like Cloud Run) and report back the deployment status and service URL. "
+        "You can also retrieve details like the URL or the image URI of a service."
+    ),
+    tools=[deploy_to_cloud_run, get_latest_deployed_image, get_service_details],
+)
+    
 # --- ADK Agent Definition ---
 da_agent = Agent(
     name="geminiflow_deployment_agent",
