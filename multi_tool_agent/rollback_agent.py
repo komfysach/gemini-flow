@@ -6,6 +6,7 @@ import logging
 from google.adk.agents import Agent
 from google.cloud import run_v2
 from google.api_core import exceptions as api_exceptions
+from google.protobuf import field_mask_pb2
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -91,8 +92,8 @@ def redirect_traffic_to_revision(
 ) -> dict:
     """
     Updates a Cloud Run service to direct 100% of traffic to a specific revision.
-    This function fetches the current service configuration, updates only the traffic
-    rules, and then applies the update to prevent "required field not present" errors.
+    This function uses a FieldMask to explicitly update only the traffic configuration,
+    preventing "required field not present" errors.
 
     Args:
         project_id (str): The Google Cloud Project ID.
@@ -111,11 +112,10 @@ def redirect_traffic_to_revision(
     service_full_path = f"projects/{project_id}/locations/{location}/services/{service_id}"
     
     try:
-        # STEP 1: Get the current, full service configuration. This is the key to the fix.
+        # STEP 1: Get the current service configuration. We still need the object to modify.
         service = client.get_service(name=service_full_path)
 
         # STEP 2: Define the new traffic split.
-        # Note the correction to TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION
         traffic_target = run_v2.types.TrafficTarget(
             revision=revision_name,
             percent=100,
@@ -123,11 +123,18 @@ def redirect_traffic_to_revision(
         )
         
         # STEP 3: Update the traffic attribute on the fetched service object.
-        # We are modifying the object we got from the API, so it has all the required fields.
         service.traffic = [traffic_target]
         
-        # STEP 4: Call update_service with the modified, complete service object.
-        operation = client.update_service(service=service)
+        # STEP 4: Create an update_mask. This is the key fix.
+        # It explicitly tells the API to only update the 'traffic' field,
+        # preventing validation errors on other fields like 'template'.
+        update_mask = field_mask_pb2.FieldMask(paths=["traffic"])
+        
+        # STEP 5: Call update_service with the modified service object AND the update mask.
+        operation = client.update_service(
+            service=service,
+            update_mask=update_mask
+        )
         logging.info("Rollback Agent: Waiting for traffic update to complete...")
         operation.result(timeout=300) # Wait up to 5 minutes
         
