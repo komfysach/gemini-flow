@@ -3,6 +3,7 @@
 import os
 import logging
 import json
+import time
 from google.adk.agents import Agent # Or LlmAgent if BTA directly uses an LLM for complex tasks
 from google.cloud.devtools import cloudbuild_v1
 from google.cloud import storage
@@ -115,132 +116,241 @@ def _summarize_test_failures_with_gemini(failure_details: list) -> str:
         return f"Could not summarize failures due to an error: {e}. Raw details: {str(failure_details)}"
 
 
-def trigger_build_and_monitor( 
+def trigger_build_and_monitor(
     trigger_id: str,
     project_id: str,
-    repo_name: str, 
+    repo_name: str,
     branch_name: str,
-    commit_sha: str = None
+    commit_sha: str
 ) -> dict:
-    if not project_id: 
-        project_id = GCP_PROJECT_ID
-    if not project_id:
-        return {"status": "ERROR", "error_message": "GCP_PROJECT_ID is not set."}
-
-    test_results_summary = {
-        "test_status": "NOT_INITIALIZED",
-        "tests_run": 0,
-        "tests_failed": 0,
-        "tests_errors": 0,
-        "failure_summary": "Test processing not reached or an early error occurred."
-    }
-
-    logging.info(f"BTA: Triggering Cloud Build: project='{project_id}', trigger='{trigger_id}', branch='{branch_name}'")
+    """
+    Triggers a Cloud Build and monitors it to completion, with enhanced log capture and summarization.
+    """
+    print(f"🔨 Triggering build for {repo_name}:{branch_name} (commit: {commit_sha[:8]})")
+    
+    if not all([trigger_id, project_id, repo_name, branch_name, commit_sha]):
+        return {"status": "ERROR", "error_message": "Missing required parameters for build trigger."}
+    
+    logging.info(f"BTA Agent: Triggering build for repo '{repo_name}' on branch '{branch_name}' with commit '{commit_sha}'.")
+    
     client = cloudbuild_v1.CloudBuildClient()
-
     
-    source_to_build_dict = {
-        "repo_name": repo_name,
-        "substitutions": {}, 
-    }
-    
-    # Set the revision (branch or commit) on the source dictionary
-    if commit_sha:
-        source_to_build_dict["commit_sha"] = commit_sha
-    else:
-        source_to_build_dict["branch_name"] = branch_name
+    # Configure the build request
+    repo_source = cloudbuild_v1.RepoSource()
+    repo_source.project_id = project_id
+    repo_source.repo_name = repo_name
+    repo_source.branch_name = branch_name
+    repo_source.commit_sha = commit_sha
     
     try:
-        logging.info(f"BTA: Submitting trigger request with source as dictionary: {source_to_build_dict}")
-        
-        # Call the client library method using the dictionary for the 'source' parameter.
+        # Trigger the build
+        print("⚙️ Starting Cloud Build...")
         operation = client.run_build_trigger(
             project_id=project_id,
             trigger_id=trigger_id,
-            source=source_to_build_dict
+            source=repo_source
         )
         
-        logging.info(f"BTA: Build triggered. Operation name: {operation.metadata.build.id}. Waiting...")
-        build_result = operation.result(timeout=1200) 
+        build_id = operation.metadata.build.id
+        print(f"📋 Build started with ID: {build_id}")
         
-        # ... (rest of the function for processing results remains the same) ...
-        build_id = build_result.id
-        build_status_str = cloudbuild_v1.Build.Status(build_result.status).name
-        logging.info(f"BTA: Build {build_id} completed with status: {build_status_str}")
+        # Monitor the build
+        print("⏳ Monitoring build progress...")
+        build = client.get_build(project_id=project_id, id=build_id)
         
-        final_commit_sha_for_artifacts = commit_sha
-        if not final_commit_sha_for_artifacts and build_result.source_provenance and \
-           build_result.source_provenance.resolved_repo_source and \
-           build_result.source_provenance.resolved_repo_source.commit_sha:
-            final_commit_sha_for_artifacts = build_result.source_provenance.resolved_repo_source.commit_sha
-        elif not final_commit_sha_for_artifacts and build_result.substitutions and 'COMMIT_SHA' in build_result.substitutions:
-            final_commit_sha_for_artifacts = build_result.substitutions['COMMIT_SHA']
+        while build.status in [cloudbuild_v1.Build.Status.QUEUED, cloudbuild_v1.Build.Status.WORKING]:
+            time.sleep(10)
+            build = client.get_build(project_id=project_id, id=build_id)
+            print(f"🔄 Build status: {build.status.name}")
         
-        if final_commit_sha_for_artifacts:
-            test_artifact_object_name = f"test-results/{final_commit_sha_for_artifacts}/test_results.json"
-            logging.info(f"BTA: Downloading test artifact: gs://{TEST_RESULTS_BUCKET_NAME}/{test_artifact_object_name}")
-            json_content = _download_gcs_artifact(TEST_RESULTS_BUCKET_NAME, test_artifact_object_name)
-
-            if json_content:
-                parsed_results = _parse_go_test_json(json_content)
-                test_results_summary["tests_run"] = parsed_results.get("tests", 0)
-                test_results_summary["tests_failed"] = parsed_results.get("failures", 0)
-                test_results_summary["tests_skipped"] = parsed_results.get("skipped", 0)
-                if parsed_results.get("failures", 0) > 0:
-                    test_results_summary["test_status"] = "FAILED"
-                    test_results_summary["failure_summary"] = _summarize_test_failures_with_gemini(parsed_results.get("failure_details", []))
-                elif parsed_results.get("tests", 0) > 0:
-                    test_results_summary["test_status"] = "PASSED"
-                    test_results_summary["failure_summary"] = "All tests passed."
-                else:
-                    test_results_summary["test_status"] = "NO_TESTS_FOUND_IN_REPORT"
-            else:
-                test_results_summary["test_status"] = "RESULTS_FILE_NOT_FOUND"
-                test_results_summary["failure_summary"] = "Test results JSON file not found in artifacts."
-        else:
-            logging.warning("BTA: Could not determine commit SHA for fetching test artifacts.")
-            test_results_summary["failure_summary"] = "Could not determine commit SHA for fetching test artifacts."
-
-        if build_status_str == "SUCCESS":
-            final_commit_sha_for_image = final_commit_sha_for_artifacts 
-            if not final_commit_sha_for_image:
-                 return {
-                    "status": "WARNING_SUCCESS", 
-                    "build_id": build_id,
-                    "message": "Build succeeded, but commit SHA for image tagging could not be determined.",
-                    "details": MessageToDict(build_result._pb),
-                    "test_results": test_results_summary
+        # Build completed - capture detailed results
+        final_status = build.status.name
+        print(f"📊 Build completed with status: {final_status}")
+        
+        # Extract build logs if available
+        build_logs = ""
+        log_summary = ""
+        if hasattr(build, 'log_url') and build.log_url:
+            try:
+                # Try to fetch and summarize logs
+                build_logs = fetch_build_logs(build.log_url)
+                if build_logs:
+                    log_summary = summarize_build_logs_with_gemini(build_logs, final_status)
+            except Exception as e:
+                logging.warning(f"Could not fetch build logs: {e}")
+                log_summary = f"Build logs available at: {build.log_url}"
+        
+        # Prepare response based on build status
+        if build.status == cloudbuild_v1.Build.Status.SUCCESS:
+            # Extract image information
+            image_info = {}
+            if build.results and build.results.images:
+                first_image = build.results.images[0]
+                image_info = {
+                    "name": first_image.name,
+                    "digest": first_image.digest
                 }
-            image_uri_commit = f"{ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/{project_id}/{ARTIFACT_REGISTRY_REPO}/{IMAGE_NAME}:{final_commit_sha_for_image}"
-            image_uri_latest = f"{ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/{project_id}/{ARTIFACT_REGISTRY_REPO}/{IMAGE_NAME}:latest"
+            
+            # Extract test results if available
+            test_results = extract_test_results(build)
+            
+            success_message = f"Build completed successfully for {repo_name}:{branch_name}"
+            if log_summary:
+                success_message += f"\n\n📋 Build Summary:\n{log_summary}"
             
             return {
                 "status": "SUCCESS",
+                "message": success_message,
                 "build_id": build_id,
-                "image_uri_commit": image_uri_commit,
-                "image_uri_latest": image_uri_latest,
-                "message": "Build completed successfully.",
-                "details": MessageToDict(build_result._pb),
-                "test_results": test_results_summary
+                "image_uri_commit": f"{image_info.get('name', '')}",
+                "details": {
+                    "results": {
+                        "images": [image_info] if image_info else []
+                    }
+                },
+                "test_results": test_results,
+                "build_logs": build_logs[:1000] if build_logs else "",  # First 1000 chars
+                "log_summary": log_summary
             }
-        else: 
-            log_url = build_result.log_url
-            error_message = f"Build {build_id} failed with status {build_status_str}. Logs: {log_url}"
-            logging.error(error_message)
+        else:
+            # Build failed
+            failure_message = f"Build failed with status: {final_status}"
+            if log_summary:
+                failure_message += f"\n\n🔍 Failure Analysis:\n{log_summary}"
+            elif build.failure_info:
+                failure_message += f"\nFailure details: {build.failure_info.detail}"
+            
             return {
-                "status": build_status_str,
+                "status": "FAILURE",
+                "error_message": failure_message,
                 "build_id": build_id,
-                "error_message": error_message,
-                "details": MessageToDict(build_result._pb),
-                "test_results": test_results_summary 
+                "build_logs": build_logs[:1000] if build_logs else "",
+                "log_summary": log_summary
             }
-
+            
     except Exception as e:
-        error_msg = f"BTA: An error occurred while triggering or monitoring the build: {str(e)}"
+        error_msg = f"BTA Agent: Error during build trigger or monitoring: {e}"
         logging.exception(error_msg)
-        return {"status": "ERROR", "error_message": error_msg, "test_results": test_results_summary}
+        return {"status": "ERROR", "error_message": error_msg}
 
+def fetch_build_logs(log_url: str) -> str:
+    """
+    Fetch build logs from Cloud Storage URL.
+    """
+    try:
+        # Extract bucket and object from log URL
+        # Format: gs://bucket/path/to/log
+        if not log_url.startswith('gs://'):
+            return ""
+        
+        path_parts = log_url[5:].split('/', 1)  # Remove 'gs://' and split
+        if len(path_parts) != 2:
+            return ""
+        
+        bucket_name, object_name = path_parts
+        
+        # Download the log file
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(object_name)
+        
+        # Download as text
+        log_content = blob.download_as_text()
+        return log_content
+        
+    except Exception as e:
+        logging.warning(f"Could not fetch build logs from {log_url}: {e}")
+        return ""
 
+def summarize_build_logs_with_gemini(logs: str, build_status: str) -> str:
+    """
+    Use Gemini to summarize build logs and provide insights.
+    """
+    try:
+        import google.generativeai as genai
+        
+        # Configure Gemini
+        genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        prompt = f"""
+        Analyze the following Cloud Build logs and provide a concise summary:
+        
+        Build Status: {build_status}
+        
+        Build Logs:
+        {logs[:4000]}  # Limit to first 4000 characters
+        
+        Please provide:
+        1. A brief summary of what the build did
+        2. Key steps that were executed
+        3. If the build failed, identify the specific error and suggest fixes
+        4. If the build succeeded, highlight any important outputs or artifacts
+        
+        Keep the response concise and actionable.
+        """
+        
+        response = model.generate_content(prompt)
+        return response.text
+        
+    except Exception as e:
+        logging.warning(f"Could not summarize logs with Gemini: {e}")
+        return f"Build completed with status: {build_status}. Manual log review may be needed."
+
+def extract_test_results(build) -> dict:
+    """
+    Extract test results from a completed build.
+    
+    This function checks if the build has associated test results in the 
+    Google Cloud Storage bucket and parses them accordingly.
+    """
+    build_id = build.id
+    logging.info(f"BTA: Extracting test results for build {build_id}")
+    
+    # Default response if no test results found
+    default_result = {
+        "test_status": "NO_TESTS",
+        "message": "No test results found for this build."
+    }
+    
+    try:
+        # Construct the path where test results might be stored in GCS
+        test_results_path = f"builds/{build_id}/test-results.json"
+        
+        # Try to download the test results from GCS
+        test_json = _download_gcs_artifact(TEST_RESULTS_BUCKET_NAME, test_results_path)
+        if not test_json:
+            logging.info(f"BTA: No test results found at gs://{TEST_RESULTS_BUCKET_NAME}/{test_results_path}")
+            return default_result
+        
+        # Parse the test results
+        results = _parse_go_test_json(test_json)
+        
+        # Get a summary of failures if there are any
+        failure_summary = ""
+        if results.get("failures", 0) > 0 and results.get("failure_details"):
+            failure_summary = _summarize_test_failures_with_gemini(results["failure_details"])
+        
+        # Construct the result dictionary
+        test_result = {
+            "test_status": "PASSED" if results.get("failures", 0) == 0 else "FAILED",
+            "tests_total": results.get("tests", 0),
+            "tests_failed": results.get("failures", 0),
+            "tests_skipped": results.get("skipped", 0),
+            "failure_details": results.get("failure_details", []),
+            "failure_summary": failure_summary
+        }
+        
+        logging.info(f"BTA: Extracted test results: {test_result['tests_total']} tests, {test_result['tests_failed']} failures")
+        return test_result
+        
+    except Exception as e:
+        logging.error(f"BTA: Error extracting test results: {e}")
+        return {
+            "test_status": "ERROR",
+            "message": f"Error extracting test results: {str(e)}"
+        }
+    
 # --- ADK Agent Definition for BTA ---
 bta_agent = Agent( 
     name="geminiflow_build_test_agent_enhanced",
