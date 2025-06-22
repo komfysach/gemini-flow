@@ -1,5 +1,7 @@
 # Project GeminiFlow: A Multi-Agent DevSecOps Co-Pilot
 
+## [Documentation](https://github.com/komfysach/gemini-flow/tree/main)
+
 ### Inspiration
 
 As a full-stack developer, my world typically revolves around front-end frameworks using React/React Native and shaping backend APIs using PHP Laravel. The intricate dance of CI/CD pipelines and cloud infrastructure was something I always found intriguing, but did not get down to it - personally being a very hands-on learner I thought that I need to get my hands dirty and learn this important aspect of the Software Development lifecycle.
